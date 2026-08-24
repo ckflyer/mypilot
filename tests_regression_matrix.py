@@ -126,7 +126,14 @@ STATES = [
 # Every page a person can actually open. The API endpoints are covered by
 # other suites; these are the ones that RENDER.
 PAGES = ["/", "/calendar", "/flights", "/settings", "/admin"]
-VIEWER_PAGES = ["/", "/calendar", "/viewer-settings"]
+VIEWER_PAGES = ["/", "/calendar", "/settings"]
+
+
+def viewer_pilot_settings():
+    """The pilot-owned values a viewer must not be able to move."""
+    from app.settings import load_settings
+    s = load_settings(1)
+    return (s.poll_seconds, s.aeroapi_budget, s.icon_style, s.theme, s.accent)
 
 
 def scan(name, resp):
@@ -282,10 +289,43 @@ def main():
 
     # A pilot's own pages must NOT be reachable on a share code. The
     # viewer sees a schedule; they do not get the account that owns it.
-    for page in ("/flights", "/admin", "/settings"):
+    #
+    # /settings LEFT THIS LIST IN 1.25.2, deliberately. It used to be here
+    # because settings was pilot-only and viewers had their own URL — and
+    # that split is precisely what bounced a family member to a login
+    # screen when she tapped the Settings tab. One route serves both now,
+    # so "kept out" is the wrong assertion; the right one is that a viewer
+    # gets IN and still cannot see a pilot's half. That is checked below,
+    # because a merged page is only safe if the gating is real.
+    for page in ("/flights", "/admin"):
         resp = viewer.get(page, follow_redirects=False)
         check(f"viewer is kept out of {page}",
               resp.status_code in (302, 303, 401, 403, 404), str(resp.status_code))
+
+    # ONE PAGE, TWO AUDIENCES — so the gating carries the whole weight.
+    resp = viewer.get("/settings")
+    check("viewer reaches /settings", resp.status_code == 200, str(resp.status_code))
+    body = resp.text
+    # Each of these is something a viewer does not own. A missing {% if %}
+    # would put one of them on her page.
+    for marker, why in (('id="aeroapi-key"', "the pilot's API key field"),
+                        ('id="aeroapi-budget"', "the pilot's spend limit"),
+                        ('id="poll-seconds"', "the pilot's poll interval"),
+                        ("/settings/regenerate-recovery", "account recovery"),
+                        ('name="current_password"', "the password form"),
+                        ('href="/admin"', "the admin link")):
+        check(f"viewer's settings page omits {why}", marker not in body, marker)
+
+    # AND THE POST IS GATED TOO, not just the render. A form can be sent by
+    # hand; "the input wasn't on the page" is not access control.
+    before = viewer_pilot_settings()
+    viewer.post("/settings", data={"theme": "dark", "accent": "indigo",
+                                   "time_format": "24", "poll_seconds": "300",
+                                   "aeroapi_budget": "99.00", "icon_style": "delta"},
+                follow_redirects=False)
+    after = viewer_pilot_settings()
+    check("a viewer posting the pilot's fields changes nothing on the account",
+          before == after, f"{before} -> {after}")
 
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     return 1 if FAIL else 0

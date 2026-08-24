@@ -365,14 +365,17 @@ def main():
             check(f"{name}: form posts to {action}", resolves(action), action)
     check("...and forms were actually found to check", seen_any)
 
-    # The one dynamic action, checked by its values rather than its shape.
-    # Skipping it entirely would leave the page that serves two audiences
-    # as the only form nothing verifies.
+    # 1.25.2: settings no longer has a dynamic action. It used to be handed
+    # one by the route ({{ post_to }}), switching between /settings and
+    # /viewer-settings — and that two-URL split is what bounced a viewer to
+    # a login screen when they tapped Settings. One route serves both now,
+    # so the form names it directly and is covered by the ordinary scan
+    # above. What is left to check is that the old address still answers,
+    # since a viewer may have bookmarked it.
     main_src = open(os.path.join(HERE, "app", "main.py")).read()
-    supplied = set(re.findall(r'post_to="([^"]+)"', main_src))
-    check("the settings template is handed at least one action", supplied)
-    for target in sorted(supplied):
-        check(f"...and post_to={target} is a real route", resolves(target), target)
+    check("settings has no dynamic form action left",
+          'post_to="' not in main_src)
+    check("the retired viewer URL still resolves", resolves("/viewer-settings"))
 
     # The old path stays reachable, because a phone with the review page
     # still open from before the update posts to it. 307 and NOT 303:

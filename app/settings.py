@@ -27,6 +27,11 @@ class AppSettings(BaseModel):
     show_flightaware: bool = True
     show_fr24: bool = True
     theme: str = "dark"
+    # The accent hue, SEPARATE from dark/light (1.25.0). A KEY, not a hex —
+    # see ACCENTS in main.py for the valid set and static/app.css for the
+    # values each key resolves to. Storing a key rather than a colour is
+    # what lets the contrast test check every choice a user can make.
+    accent: str = "indigo"
     # Which plane silhouette to draw. Applies to the map marker immediately
     # and to the web manifest's icons, which is as far as a browser lets us
     # go — see ICON_STYLES in main.py for why an ALREADY-INSTALLED home
@@ -40,8 +45,8 @@ def load_settings(user_id: int) -> AppSettings:
     try:
         row = conn.execute(
             """
-            SELECT aeroapi_enabled, aeroapi_key, aeroapi_budget, time_format, theme, poll_seconds,
-                   show_flightaware, show_fr24, icon_style
+            SELECT aeroapi_enabled, aeroapi_key, aeroapi_budget, time_format, theme, accent,
+                   poll_seconds, show_flightaware, show_fr24, icon_style
             FROM users WHERE id = ?
             """,
             (user_id,),
@@ -57,6 +62,7 @@ def load_settings(user_id: int) -> AppSettings:
                         if row["aeroapi_budget"] is not None else 4.90),
         time_format=row["time_format"] or "24",
         theme=row["theme"] or "dark",
+        accent=row["accent"] or "indigo",
         icon_style=row["icon_style"] or "modern",
         poll_seconds=row["poll_seconds"] or 15,
         show_flightaware=bool(row["show_flightaware"]),
@@ -71,13 +77,13 @@ def save_settings(user_id: int, s: AppSettings) -> None:
             """
             UPDATE users SET
                 aeroapi_enabled = ?, aeroapi_key = ?, aeroapi_budget = ?,
-                time_format = ?, theme = ?, poll_seconds = ?,
+                time_format = ?, theme = ?, accent = ?, poll_seconds = ?,
                 show_flightaware = ?, show_fr24 = ?, icon_style = ?
             WHERE id = ?
             """,
             (
                 int(s.aeroapi_enabled), s.aeroapi_key, float(s.aeroapi_budget),
-                s.time_format, s.theme, s.poll_seconds,
+                s.time_format, s.theme, s.accent, s.poll_seconds,
                 int(s.show_flightaware), int(s.show_fr24), s.icon_style,
                 user_id,
             ),

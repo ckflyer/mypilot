@@ -375,8 +375,9 @@ def init_db() -> None:
                 recovery_code_hash TEXT,
                 time_format TEXT DEFAULT '24',
                 theme TEXT DEFAULT 'dark',
+                accent TEXT DEFAULT 'indigo',
                 icon_style TEXT DEFAULT 'modern',
-                poll_seconds INTEGER DEFAULT 45,
+                poll_seconds INTEGER DEFAULT 15,
                 show_flightaware INTEGER DEFAULT 1,
                 show_fr24 INTEGER DEFAULT 1,
                 is_admin INTEGER DEFAULT 0,
@@ -459,6 +460,18 @@ def init_db() -> None:
             # before the setting existed, so an upgrade changes nothing until
             # somebody chooses otherwise.
             ("icon_style", "TEXT DEFAULT 'modern'"),
+            # 1.25.0. The accent hue, chosen INDEPENDENTLY of dark/light —
+            # they answer different questions ("how bright is this page"
+            # vs "what colour are the things I can tap"), and tying them
+            # together would mean a pilot who wanted a teal app had to
+            # accept a light one. Stores a KEY, never a hex: the actual
+            # values live in static/app.css, where the contrast test can
+            # read them. A hex in this column would be a colour nothing
+            # ever checked.
+            #
+            # Defaults to the indigo every install already had, so an
+            # upgrade changes nothing until somebody chooses otherwise.
+            ("accent", "TEXT DEFAULT 'indigo'"),
         ]:
             if name not in ucols:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {name} {decl}")
@@ -474,6 +487,21 @@ def init_db() -> None:
         # old default move — a pilot who chose 4.50, or any other number,
         # picked it, and this must not overwrite a deliberate choice.
         conn.execute("UPDATE users SET aeroapi_budget = 4.90 WHERE aeroapi_budget = 4.50")
+
+        # 1.25.0. The column DEFAULT said 45 seconds while AppSettings said
+        # 15 and the settings page's own hint said "15 is a good balance".
+        # So a fresh account was created on 45, shown advice recommending
+        # 15, and told nothing about the disagreement — three numbers for
+        # one setting, which is the shape of problem invariant 25 and the
+        # zone-label rule both exist to prevent.
+        #
+        # 15 wins because it is what the app RECOMMENDS and what the code
+        # defaults to; 45 was only ever the table declaration nobody read.
+        # Same conservative rule as the budget migration above: only rows
+        # sitting on EXACTLY the old default move. A pilot who deliberately
+        # chose 45 to spare their phone's battery keeps it, and this cannot
+        # tell the difference any other way.
+        conn.execute("UPDATE users SET poll_seconds = 15 WHERE poll_seconds = 45")
 
         # A v5.0 database has a per-user `flights` table with a composite
         # primary key. The shared table cannot be created over the top of

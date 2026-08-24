@@ -68,8 +68,67 @@ fi
 echo "==> resetting to origin/main"
 git reset --hard origin/main
 
+# WHICH DOCKER COMMAND ACTUALLY WORKS (1.25.1).
+#
+# This script used to call `docker compose` bare. On a box where the user
+# is not in the docker group that call fails, and because of `set -e` the
+# script STOPS RIGHT HERE — after the git reset above has already
+# succeeded. The repo updates, the image does not, and the script exits
+# without ever printing its closing banner.
+#
+# That failure mode cost a full debugging session. The symptom was a page
+# throwing a 500 for a template variable the running code had never heard
+# of, because the container was serving a Python file from the previous
+# release next to templates from this one. Nothing in the output said so.
+#
+# Detected rather than assumed: `sudo` is only used if the plain call
+# cannot reach the daemon, so a box that never needed it is not suddenly
+# prompted for a password.
+DOCKER="docker"
+if ! docker compose version >/dev/null 2>&1; then
+  if sudo -n docker compose version >/dev/null 2>&1 || sudo docker compose version >/dev/null 2>&1; then
+    DOCKER="sudo docker"
+    echo "==> using sudo for docker (your user cannot reach the daemon directly)"
+  else
+    echo ""
+    echo "  ERROR: cannot run 'docker compose', with or without sudo."
+    echo "  The code has been updated but the app has NOT been rebuilt."
+    echo "  It is still running the previous release."
+    echo ""
+    exit 1
+  fi
+fi
+
 echo "==> rebuilding and restarting"
-docker compose up -d --build
+$DOCKER compose up -d --build
+
+# VERIFY, DO NOT ASSUME. The whole point of this script is that the image
+# gets rebuilt; the one thing it never checked was whether that happened.
+# Comparing the version on disk with the version the CONTAINER reports is
+# the only check that actually answers it — `up -d --build` can report
+# success and still leave an old container running.
+echo "==> verifying"
+REPO_VERSION=$(grep -oE 'VERSION = "[^"]+"' app/version.py | cut -d'"' -f2)
+sleep 2
+RUNNING_VERSION=$($DOCKER compose exec -T flight-tracker \
+  grep -oE 'VERSION = "[^"]+"' app/version.py 2>/dev/null | cut -d'"' -f2 || echo "")
+
+if [ -z "$RUNNING_VERSION" ]; then
+  echo "  Could not read the version from the container. Check it is up:"
+  echo "      $DOCKER compose ps"
+elif [ "$REPO_VERSION" = "$RUNNING_VERSION" ]; then
+  echo "  OK - repo and container are both $REPO_VERSION"
+else
+  echo ""
+  echo "  WARNING: THE REBUILD DID NOT TAKE EFFECT."
+  echo "      repo says      $REPO_VERSION"
+  echo "      container says $RUNNING_VERSION"
+  echo ""
+  echo "  The app is serving old code with new templates. Pages may throw"
+  echo "  500 errors. Force a clean rebuild:"
+  echo "      $DOCKER compose build --no-cache && $DOCKER compose up -d"
+  echo ""
+fi
 
 echo "==> done. Recent logs:"
-docker compose logs --tail=20
+$DOCKER compose logs --tail=20

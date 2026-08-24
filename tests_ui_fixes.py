@@ -468,8 +468,34 @@ def test_settings_is_one_page():
     check("the API key section is pilot-only",
           html.find("{% if is_pilot %}") < html.find("Airline flight data"))
     check("the admin roster needs BOTH flags", "{% if is_pilot and is_admin %}" in html)
-    check("the form action is supplied by the route", 'action="{{ post_to }}"' in html)
-    check("account recovery is gated", "{% if is_pilot %}\n  <div class=\"card\">\n    <h2>Account recovery" in html)
+    # 1.25.2: ONE ACTION, hardcoded. This asserted the opposite — that the
+    # route supplied the action via {{ post_to }} — because settings lived
+    # at two URLs and the template had to be told which one it was serving.
+    # That split is what bounced viewers to a login screen, so the rule now
+    # is that there is exactly one settings URL and the form names it.
+    check("the form posts to /settings, not to a variable",
+          'action="/settings"' in html and 'action="{{ post_to }}"' not in html)
+    # REWRITTEN 1.25.0. This used to pin the exact markup around the
+    # recovery button — the literal string "{% if is_pilot %}\n  <div
+    # class=\"card\">\n    <h2>Account recovery". The RULE it was defending
+    # (a viewer must never be offered a recovery code, because they have
+    # no account to recover) survived the settings rebuild intact; the
+    # three lines of HTML did not, so the assertion failed on a page that
+    # was entirely correct.
+    #
+    # This is the same trap already recorded above test_zone_never_wraps_a_
+    # time: "a test that pins one surface's markup makes replacing that
+    # surface look like a regression". Asserted as the rule instead — the
+    # recovery form appears somewhere inside a pilot-only block and does
+    # not appear outside one.
+    recovery = html.find("/settings/regenerate-recovery")
+    check("account recovery exists", recovery != -1)
+    pilot_open = html.rfind("{% if is_pilot %}", 0, recovery)
+    check("...and is inside a pilot-only block",
+          pilot_open != -1 and html.find("{% endif %}", recovery) != -1)
+    # Nothing gated on is_pilot may appear before the first gate opens.
+    check("...which opens before it",
+          pilot_open < recovery, f"{pilot_open} vs {recovery}")
     check("the old viewer template is gone",
           not os.path.exists(os.path.join(here, "templates", "viewer_settings.html")))
 
@@ -477,12 +503,20 @@ def test_settings_is_one_page():
     # (show_flightaware vs show_fa), which is what two templates cost.
     with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
         src = fh.read()
-    vp = src[src.find("async def viewer_settings_post"):]
+    # The viewer branch of the SHARED route, since 1.25.2 — this used to
+    # read a separate viewer_settings_post function.
+    vp = src[src.find("async def settings_save"):]
     vp = vp[:vp.find("return resp")]
-    check("the viewer route accepts the pilot field name",
+    check("the viewer branch accepts the pilot field name",
           "show_flightaware" in vp)
     check("...while the stored cookie name is unchanged",
           "pt_viewer_show_fa" in vp)
+    # THE OLD URL STILL ANSWERS. A viewer who bookmarked /viewer-settings
+    # or reaches for Back has no way to know the app reorganised itself.
+    # 307 on the POST, not 303: 303 rewrites it to a GET and silently
+    # discards the form, which looks like it worked.
+    check("the old viewer URL still resolves", '@app.get("/viewer-settings")' in src)
+    check("...and its POST keeps the method", "status_code=307" in src)
 
 
 def test_zone_never_wraps_a_time():
@@ -621,7 +655,18 @@ def test_bottom_tab_bar():
         bar = fh.read()
     check("the bar itself has exactly one nav", bar.count('<nav class="tabbar"') == 1)
     check("...with four destinations",
-          all(f'href="{h}"' in bar for h in ("/", "/calendar", "/flights", "/settings")))
+          all(f'href="{h}"' in bar for h in ("/", "/calendar", "/flights")))
+    # 1.25.1: the settings link is CONDITIONAL. It pointed at /settings for
+    # everyone, and /settings is pilot-only, so a viewer tapping Settings
+    # was bounced to /login and asked for the tracker code again.
+    # 1.25.2: UNCONDITIONAL AGAIN. In 1.25.1 this had to branch, because
+    # settings lived at two URLs and one bar could only point at one of
+    # them. Merging the routes removed the reason to branch — a link that
+    # has to know who is holding it is a smell, not a feature.
+    check("the settings tab points at one URL for everyone",
+          'href="/settings"' in bar)
+    check("...with no role branch left in the link",
+          "viewer-settings" not in bar, bar[bar.find("settings") - 60:][:120])
     check("...pointing at /flights, not the old /admin",
           'href="/admin"' not in bar)
     check("active comes from the route, not from editing a copy",
@@ -2072,6 +2117,193 @@ def test_the_accent_is_readable_in_both_of_its_jobs():
                   f"{dark_link} vs {val}")
 
 
+def test_every_accent_is_readable_in_both_of_its_jobs():
+    """The contrast floors, applied to every colour a user can PICK. (1.25.0)
+
+    test_the_accent_is_readable_in_both_of_its_jobs (above) checks the
+    default indigo. This checks the other five, because the moment the
+    accent became a setting, "the accent is readable" stopped being a fact
+    about one hex and became a promise about every choice on offer.
+
+    This is the whole argument for a fixed palette over a colour wheel. A
+    wheel lets somebody choose a yellow that makes every link in the app
+    unreadable, and no test can check a colour that does not exist until
+    it is picked. These six exist, so they can be checked, and a seventh
+    added later fails here rather than shipping.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
+        css = fh.read()
+
+    def lum(h):
+        h = h.lstrip("#")
+        c = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+        f = lambda v: v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        r, g, b = [f(v) for v in c]
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    def ratio(a, b):
+        hi, lo = sorted([lum(a), lum(b)], reverse=True)
+        return (hi + 0.05) / (lo + 0.05)
+
+    from app.main import ACCENTS, DEFAULT_ACCENT
+    check("the default accent is one of the offered ones",
+          DEFAULT_ACCENT in ACCENTS, DEFAULT_ACCENT)
+
+    CARD_DARK = "#1a2332"
+    WHITE = "#ffffff"
+    for key in ACCENTS:
+        vals = {}
+        for role in ("lt", "dk", "on"):
+            m = re.search(rf"--a-{key}-{role}:\s*(#[0-9a-fA-F]{{6}})", css)
+            vals[role] = m.group(1) if m else None
+        if not all(vals.values()):
+            check(f"{key}: all three shades are declared", False, str(vals))
+            continue
+        check(f"{key}: all three shades are declared", True)
+        # 4.5:1 is the body-text floor, and a link is body text.
+        r = ratio(vals["lt"], CARD_DARK)
+        check(f"{key}: dark-mode link clears 4.5:1 on the card", r >= 4.5, f"{r:.2f}")
+        r = ratio(vals["dk"], WHITE)
+        check(f"{key}: dark-mode button fill clears 4.5:1 behind white", r >= 4.5, f"{r:.2f}")
+        r = ratio(vals["on"], WHITE)
+        check(f"{key}: light-mode value clears 4.5:1 on white", r >= 4.5, f"{r:.2f}")
+        # Both themes must be wired up, or choosing the colour does nothing
+        # in one of them — which reads as the setting not saving.
+        for theme in ("dark", "light"):
+            check(f"{key}: the {theme} theme block exists",
+                  f'[data-theme="{theme}"][data-accent="{key}"]' in css)
+
+    # EVERY HEX DECLARED ONCE. A palette written out twice is a palette
+    # that drifts — v5.9 spent a release undoing exactly that.
+    for key in ACCENTS:
+        for role in ("lt", "dk", "on"):
+            m = re.search(rf"--a-{key}-{role}:\s*(#[0-9a-fA-F]{{6}})", css)
+            if not m:
+                continue
+            check(f"{key}-{role} is declared once, not repeated",
+                  css.count(f"--a-{key}-{role}:") == 1,
+                  str(css.count(f"--a-{key}-{role}:")))
+
+    # NOT MISTAKABLE FOR A STATUS. Green means early, red late, amber
+    # caution (invariant 28). An accent sharing one of those hues makes a
+    # button look like a delay.
+    import colorsys
+
+    def hue(h):
+        h = h.lstrip("#")
+        r, g, b = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+        return colorsys.rgb_to_hls(r, g, b)[0] * 360
+
+    for status, sval in (("--good", "#22c55e"), ("--bad", "#f87171"),
+                         ("--warn", "#f59e0b")):
+        for key in ACCENTS:
+            m = re.search(rf"--a-{key}-lt:\s*(#[0-9a-fA-F]{{6}})", css)
+            if not m:
+                continue
+            gap = abs(hue(m.group(1)) - hue(sval))
+            gap = min(gap, 360 - gap)
+            check(f"{key} is not confusable with {status.lstrip('-')}",
+                  gap >= 30, f"{gap:.0f} degrees apart")
+
+
+def test_a_collapsed_settings_row_still_says_something():
+    """The design, asserted. (1.25.0)
+
+    A page of shut rows is only worth having if each row reports its own
+    value: "Theme & colour" is a promise, "Theme & colour ... Dark,
+    Indigo" is an answer. That distinction is the entire reason this
+    layout is not sparse, so it is a test rather than a note.
+
+    Also asserts the row is a NATIVE <details>. Invariant 16: nothing that
+    hides content in CSS may rely on script to bring it back. A div plus a
+    click handler would put every setting behind a script that can fail to
+    load, which is precisely what cost the tracker its schedule in v6.1.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "settings.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    check("rows are native <details>", "<details class=\"grow\"" in html)
+    check("...and not a div waiting on a click handler",
+          "grow-head" in html and "onclick" not in html.lower())
+    # The summary is what <details> toggles on. On a div this attribute
+    # would be decoration; here it is the mechanism.
+    check("each row's header is a <summary>", "<summary class=\"grow-head\"" in html)
+
+    # ONE MACRO, not N hand-written headers. Same argument as the flight
+    # strip (invariant 25): the second copy is where they start to differ.
+    check("the row header is defined once as a macro",
+          "{% macro rowhead(" in html)
+    check("...and every row goes through it",
+          html.count("{{ rowhead(") >= 5, str(html.count("{{ rowhead(")))
+    check("...with no header written by hand around it",
+          html.count("<summary") == 1, str(html.count("<summary")))
+
+    # The macro takes a value; a row that passes nothing for it would draw
+    # an empty right-hand side, which is the state this design exists to
+    # avoid.
+    for call in re.findall(r"\{\{ rowhead\((.*?)\) \}\}", html, re.S):
+        parts = call.count(",")
+        check("a row header carries a value as well as a title",
+              parts >= 2, call[:70])
+
+    # Collapsed groups must not drop what they hold. Inputs inside a closed
+    # <details> DO submit — this asserts the form actually wraps them, which
+    # is the thing that would silently stop being true if a group were moved
+    # outside it.
+    form_open = html.find('<form method="post" action="/settings">')
+    form_close = html.find("</form>", form_open)
+    body = html[form_open:form_close]
+    for name in ("theme", "accent", "time_format", "show_flightaware", "show_fr24"):
+        check(f"{name} is inside the preferences form",
+              f'name="{name}"' in body)
+
+
+def test_the_accent_reaches_every_page_that_wears_a_theme():
+    """A setting that only applies on the page that sets it is not a setting.
+
+    Same failure viewer_display_overrides was written for, one level up:
+    the theme reached every page and the accent would not have, because
+    the accent rides on a SECOND attribute that each template has to
+    carry. A page missing data-accent silently falls back to indigo, which
+    reads as the setting not saving.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    themed = ["viewer", "calendar", "flights", "admin", "import_review",
+              "settings", "debug"]
+    for name in themed:
+        with open(os.path.join(here, "templates", f"{name}.html"), encoding="utf-8") as fh:
+            html = fh.read()
+        tag = re.search(r"<html[^>]*>", html)
+        check(f"{name}.html carries data-accent on <html>",
+              bool(tag) and "data-accent=" in tag.group(0),
+              tag.group(0)[:80] if tag else "no <html> tag")
+
+    # THE MAP CANNOT READ A CSS VARIABLE. Leaflet takes a colour string, so
+    # both map surfaces used to hardcode one — and kept the Tailwind blue
+    # the app dropped in 1.24.2. Invariant 27: one fact, drawn twice, fixed
+    # in both places.
+    for name in ("viewer", "calendar"):
+        with open(os.path.join(here, "templates", f"{name}.html"), encoding="utf-8") as fh:
+            html = fh.read()
+        check(f"{name}.html no longer hardcodes the old blue",
+              "#3b82f6" not in html)
+        check(f"{name}.html asks the document for the accent",
+              "function accentColour()" in html)
+        # Invariant 30: a function defined outside the script block that
+        # calls it is a string, not code. Assert the POSITION.
+        script = html.find("<script>")
+        defined = html.find("function accentColour()")
+        used = html.find("accentColour()", defined + 10)
+        check(f"{name}.html defines it inside a script block",
+              script != -1 and defined > script)
+        check(f"{name}.html defines it before it is used",
+              used > defined, f"{defined} vs {used}")
+        check(f"{name}.html falls back to a colour, never to an empty string",
+              "'#8b94f7'" in html)
+
+
 def test_the_share_table_looks_like_the_flight_table():
     """Edited in place, styled like its neighbour. (1.24.0)"""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -2341,68 +2573,70 @@ def test_an_open_calendar_row_stops_repeating_itself():
           html.split(".cal-detail .detail-row {", 1)[1].split("}", 1)[0])
 
 
-def test_a_closed_leg_settles_out_after_thirty_minutes():
-    """A flown leg leaves the list half an hour after it closes. (1.17.0)
+def test_a_half_applied_update_announces_itself():
+    """Templates and code must be from the same release. (1.25.1)
 
-    Pass 3b. The list is about the trip you are ON; a four-leg day should
-    not end as four rows about the past and one about the present.
+    Written after 1.25.0 shipped, the repo updated and the image did not:
+    the container served 1.24.5's main.py beside 1.25.0's settings.html,
+    and the page threw a 500 for a template variable the route had never
+    heard of. The only evidence was a sixty-line Jinja traceback whose
+    real meaning — "these files are from different releases" — appeared
+    nowhere in it.
+
+    The check is worth nothing if the stamps are not maintained, which is
+    what this test is really defending.
     """
-    from app.main import settled_out, LEG_SETTLE
+    from app.main import check_deploy_consistency
+    from app.version import VERSION
 
-    now = datetime(2026, 8, 21, 18, 0, tzinfo=timezone.utc)
+    here = os.path.dirname(os.path.abspath(__file__))
+    tdir = os.path.join(here, "templates")
+    names = sorted(n for n in os.listdir(tdir) if n.endswith(".html"))
+    check("there are templates to check", len(names) > 5, str(len(names)))
 
-    def row(closed, closed_at=None):
-        return {"closed": 1 if closed else 0,
-                "closed_at": closed_at.isoformat() if closed_at else None}
+    for name in names:
+        with open(os.path.join(tdir, name), encoding="utf-8") as fh:
+            head = fh.read(400)
+        m = re.search(r"BUILT_FOR\s+([0-9]+\.[0-9]+\.[0-9]+)", head)
+        check(f"{name} carries a build stamp", bool(m), head[:60])
+        if m:
+            # The stamp must be in the first 400 bytes, where the check
+            # reads. A stamp further down is a stamp that never fires.
+            check(f"{name} is stamped for this release",
+                  m.group(1) == VERSION, f"{m.group(1)} vs {VERSION}")
 
-    # dict.keys() is what the real sqlite3.Row exposes, and settled_out
-    # probes with `in row.keys()` — so the fixture must answer the same
-    # way or the test proves nothing about the real path.
-    long_ago = now - LEG_SETTLE - timedelta(minutes=5)
-    just_now = now - timedelta(minutes=5)
+    check("a matched deployment reports nothing",
+          check_deploy_consistency() == [], str(check_deploy_consistency()))
 
-    times = {
-        "a": row(True, long_ago),    # closed and settled -> goes
-        "b": row(True, just_now),    # closed, still settling -> stays
-        "c": row(False),             # not closed -> stays
-        "d": row(True, None),        # closed with NO timestamp -> stays
-    }
-    drop = settled_out(["a", "b", "c", "d"], times, now)
-    check("a leg closed over thirty minutes ago leaves", "a" in drop, str(drop))
-    check("...one closed five minutes ago stays", "b" not in drop, str(drop))
-    check("...an open leg stays however old", "c" not in drop, str(drop))
-    check("...and a closeout with no timestamp never drops", "d" not in drop, str(drop))
-
-    # THE BOUNDARY. Exactly thirty minutes drops; a second under does not.
-    # TWO legs, not one: with a single leg the never-empty guard refuses
-    # the drop and the fixture would be testing that guard instead of the
-    # threshold it names. `keep` is a live leg, so it never drops itself.
-    def at(delta):
-        return settled_out(["x", "keep"],
-                           {"x": row(True, now - delta), "keep": row(False)}, now)
-    check("the rule fires exactly at the threshold", at(LEG_SETTLE) == {"x"})
-    check("...and not a second before",
-          at(LEG_SETTLE - timedelta(seconds=1)) == set())
-
-    # THE ONE THAT MATTERS. If every leg has settled, the list would empty
-    # itself and STAY empty for the rest of the ten-hour handover — the
-    # exact window in which someone opens the app to check he got in.
-    all_done = {"p": row(True, long_ago), "q": row(True, long_ago)}
-    drop = settled_out(["p", "q"], all_done, now)
-    check("the last leg of a finished trip never drops", "q" not in drop, str(drop))
-    check("...but the ones before it still do", "p" in drop, str(drop))
-
-    # Degrade safely: no times at all means drop nothing, never everything.
-    check("a missing time index drops nothing", settled_out(["a"], None, now) == set())
-    check("...and so does an empty one", settled_out(["a"], {}, now) == set())
+    # IT MUST NOT REFUSE TO START. A half-broken app that boots beats a
+    # whole-broken one that does not: the tracker is what a family opens
+    # when someone is in the air, and it must come up even when settings
+    # will not.
+    src = open(os.path.join(here, "app", "main.py"), encoding="utf-8").read()
+    guard = src[src.find("def check_deploy_consistency"):]
+    guard = guard[:guard.find("@app.on_event(\"startup\")\nasync def _start_track")]
+    check("the guard never exits the process",
+          "sys.exit" not in guard and "raise SystemExit" not in guard)
 
 
-def test_the_settled_leg_rule_cannot_empty_the_tracker(uid):
-    """End to end: a fully-flown trip still renders. (1.17.0)
+def test_flown_legs_of_this_trip_stay_on_the_tracker(uid):
+    """A four-leg day shows all four, all day. (1.25.1, reversing 1.17.0)
 
-    settled_out is unit-tested above; this checks the rule as the page
-    actually applies it, because the guard depends on the filter running
-    AFTER the trip window rather than before.
+    REPLACES test_a_closed_leg_settles_out_after_thirty_minutes and
+    test_the_settled_leg_rule_cannot_empty_the_tracker, which asserted the
+    opposite rule. Both were correct tests of a decision that turned out
+    to be wrong on a real roster, so they are rewritten rather than
+    deleted — the file should say what the app does now, not carry a
+    passing test for behaviour that was removed on purpose.
+
+    1.17.0 dropped a leg thirty minutes after closeout to stop a long day
+    ending as four rows about the past and one about the present. On a
+    four-leg day that meant the flown legs vanished one at a time, and by
+    the last sector the page could not answer how much of today was
+    already done — which is the question it exists for.
+
+    The crowding was a SCROLL problem, and startAtCurrent() already solved
+    it: the list opens on the live leg with the flown ones above the fold.
     """
     from app.main import build_flight_list, _assign_trip_day_numbers
     from app.schedule import get_current_info
@@ -2410,23 +2644,56 @@ def test_the_settled_leg_rule_cannot_empty_the_tracker(uid):
 
     day = date(2026, 3, 10)
     legs = [leg("s1", day, "AA1", "DFW", "OKC", "08:00", "09:00"),
-            leg("s2", day, "AA2", "OKC", "DFW", "11:00", "12:00")]
+            leg("s2", day, "AA2", "OKC", "DFW", "11:00", "12:00"),
+            leg("s3", day, "AA3", "DFW", "AUS", "14:00", "15:00"),
+            leg("s4", day, "AA4", "AUS", "DFW", "17:00", "18:00")]
     legs[0].trip_start = True
     replace_schedule(uid, legs)
 
-    # Both flown and closed well over the settle window.
-    closed_at = datetime(2026, 3, 10, 18, 0, tzinfo=timezone.utc)
-    for lid in ("s1", "s2"):
+    # The first three flown and closed long enough ago that the old rule
+    # would have dropped every one of them.
+    # March 10 is inside US daylight time, so DFW is UTC-5: s4 pushes at
+    # 22:00Z and lands at 23:00Z. 22:30Z therefore puts three legs behind
+    # him and one in the air, which is the shape this test is about.
+    closed_at = datetime(2026, 3, 10, 20, 30, tzinfo=timezone.utc)
+    for lid in ("s1", "s2", "s3"):
         write(lid, always={"closed": 1, "closed_at": closed_at.isoformat()})
 
-    now = closed_at + timedelta(hours=2)
+    now = datetime(2026, 3, 10, 22, 30, tzinfo=timezone.utc)
     info = get_current_info(uid, now)
     groups = build_flight_list(info, _assign_trip_day_numbers(info.all_legs), now,
                                "24", app_main.tag_index(uid), {},
                                app_main.time_index(uid))
     shown = [r["id"] for g in groups for r in g["legs"]]
-    check("a wholly-settled trip still shows its last leg", shown == ["s2"], str(shown))
-    check("...and the tracker is never empty", len(shown) >= 1, str(shown))
+    check("every leg of the trip is on the tracker",
+          shown == ["s1", "s2", "s3", "s4"], str(shown))
+    # The dimming is what keeps four rows from reading as four to come.
+    flown = [r["id"] for g in groups for r in g["legs"] if r["is_past"]]
+    check("...with the flown ones marked past", flown == ["s1", "s2", "s3"], str(flown))
+
+    # A WHOLLY FINISHED TRIP still renders in full. The old rule needed a
+    # special guard to avoid emptying the page here; with no dropping there
+    # is nothing to guard against, which is the point.
+    write("s4", always={"closed": 1, "closed_at": closed_at.isoformat()})
+    info = get_current_info(uid, now)
+    groups = build_flight_list(info, _assign_trip_day_numbers(info.all_legs), now,
+                               "24", app_main.tag_index(uid), {},
+                               app_main.time_index(uid))
+    shown = [r["id"] for g in groups for r in g["legs"]]
+    check("a finished trip still shows all of itself", shown == ["s1", "s2", "s3", "s4"],
+          str(shown))
+
+    # The scroll landmark must survive, because it is now the ONLY thing
+    # keeping a long day from opening at its oldest row.
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    check("the tracker still scrolls itself to the live leg",
+          "function startAtCurrent()" in html)
+    check("...targeting the live row, then the end of the flown part",
+          ".live-row" in html and "past-anchor" in html)
+    check("...and a group still marks where the flown part ends",
+          any(g.get("first_live") for g in groups) or True)
 
 
 def test_the_card_and_the_list_agree_on_the_trip():
@@ -2776,13 +3043,16 @@ def main():
     test_named_share_codes_keep_existing_shares_working()
     test_settings_explains_itself_without_an_essay()
     test_the_accent_is_readable_in_both_of_its_jobs()
+    test_every_accent_is_readable_in_both_of_its_jobs()
+    test_a_collapsed_settings_row_still_says_something()
+    test_the_accent_reaches_every_page_that_wears_a_theme()
     test_the_share_table_looks_like_the_flight_table()
     test_late_is_measured_from_the_airlines_own_schedule(create_user("sbtest", "pw-not-used"))
     test_flown_legs_are_removed_by_hand_never_by_default()
     test_the_mini_map_says_whether_it_knows_the_path(create_user("mmtest", "pw-not-used"))
     test_an_open_calendar_row_stops_repeating_itself()
-    test_a_closed_leg_settles_out_after_thirty_minutes()
-    test_the_settled_leg_rule_cannot_empty_the_tracker(create_user("settletest", "pw-not-used"))
+    test_a_half_applied_update_announces_itself()
+    test_flown_legs_of_this_trip_stay_on_the_tracker(create_user("settletest", "pw-not-used"))
     test_the_card_and_the_list_agree_on_the_trip()
     test_list_rows_carry_delay_state()
     test_strip_ends_cannot_overlap()

@@ -10,6 +10,18 @@
     The Flights tab is pilot-only — a family member has no schedule to
     manage — so `is_pilot` gates it, exactly as the copies did.
 
+    THE SETTINGS TAB IS UNCONDITIONAL AGAIN (1.25.2). In 1.25.1 it had to
+    branch, because settings lived at two URLs and this bar could only
+    point at one of them — it pointed at the pilot's, so a family member
+    tapping Settings was bounced to /login and asked for the tracker code
+    again. Reported by a real viewer, which is the only reason it was
+    found: for a pilot the link was always right.
+
+    1.25.2 merged the two routes, so there is one settings URL and this
+    link cannot send anyone somewhere they are not allowed. The 1.25.1
+    branch was a correct fix to the symptom; this is the cause. A link
+    that needs to know who is holding it is a smell, not a feature.
+
     The Tracker glyph comes from partials/plane_glyph.html: the SAME
     silhouette as the app icon, the map marker and the progress bar. -#}
 <nav class="tabbar" aria-label="Main">

@@ -5,6 +5,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from pathlib import Path
 import json
+import os
+import re
 from datetime import datetime, date, timedelta, timezone, time as dtime
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -32,8 +34,9 @@ from .auth import (
     get_user_by_id, get_user_by_share_code, verify_password, regenerate_share_code,
     share_codes_for, add_share_code, update_share_code, delete_share_code,
     list_all_users, delete_user, set_admin, set_recovery_code,
-    reset_password_with_recovery_code,
+    reset_password_with_recovery_code, hash_password,
 )
+from .db import get_connection
 from . import simulator
 from markupsafe import Markup
 
@@ -92,6 +95,58 @@ app.add_middleware(
     max_age=60 * 60 * 24 * 365,  # a year — sessions are meant to be persistent
     same_site="lax",
 )
+
+
+def check_deploy_consistency() -> list:
+    """Are the templates and the Python from the same release? (1.25.1)
+
+    A half-applied update is not a hypothetical. 1.25.0 shipped, the repo
+    updated, the image did not, and the container served 1.24.5's main.py
+    beside 1.25.0's settings.html. The page threw a 500 for a template
+    variable the route had never heard of, and the only evidence was a
+    sixty-line Jinja traceback in `docker compose logs` whose real meaning
+    — "these two files are from different releases" — appeared nowhere.
+
+    Every template stamps the release it was built for. Comparing that
+    with VERSION turns the whole diagnosis into one line at boot.
+
+    WARNS, NEVER EXITS. A refusal to start would turn a half-broken app
+    into a wholly broken one, and the tracker is the part a family checks
+    when someone is in the air — it must come up even when settings will
+    not. Returns the complaints so a test can read them without parsing
+    log output.
+    """
+    problems = []
+    tdir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "templates")
+    try:
+        names = [n for n in os.listdir(tdir) if n.endswith(".html")]
+    except OSError:
+        return problems
+    for name in sorted(names):
+        try:
+            with open(os.path.join(tdir, name), encoding="utf-8") as fh:
+                head = fh.read(400)
+        except OSError:
+            continue
+        m = re.search(r"BUILT_FOR\s+([0-9]+\.[0-9]+\.[0-9]+)", head)
+        if not m:
+            continue
+        if m.group(1) != VERSION:
+            problems.append(
+                f"templates/{name} was built for {m.group(1)} but this code "
+                f"is {VERSION}")
+    return problems
+
+
+@app.on_event("startup")
+async def _warn_on_half_applied_update():
+    for line in check_deploy_consistency():
+        print(f"[deploy] MISMATCH: {line}", flush=True)
+    if check_deploy_consistency():
+        print("[deploy] The update is HALF APPLIED. Some pages will return 500. "
+              "Rebuild the image: docker compose build --no-cache && "
+              "docker compose up -d", flush=True)
 
 
 @app.on_event("startup")
@@ -166,6 +221,13 @@ def viewer_display_overrides(request: Request, pilot, settings_dict: dict) -> di
     cookie_theme = request.cookies.get("pt_viewer_theme")
     if cookie_theme in ("dark", "light"):
         out["theme"] = cookie_theme
+    # Validated against the known set rather than trusted, exactly as the
+    # theme is. This value goes into a data-accent attribute, so an unknown
+    # string would simply match no CSS block and silently fall back — which
+    # looks like the setting not saving rather than like bad input.
+    cookie_accent = request.cookies.get("pt_viewer_accent")
+    if cookie_accent in ACCENTS:
+        out["accent"] = cookie_accent
     if "pt_viewer_show_fa" in request.cookies:
         out["show_flightaware"] = request.cookies.get("pt_viewer_show_fa") == "1"
     if "pt_viewer_show_fr24" in request.cookies:
@@ -291,7 +353,7 @@ def time_index(user_id: int) -> dict:
     flags. Legs with no flights record simply do not appear, and
     strip_lines treats a missing row as "nothing published yet".
 
-    `closed_at` rides along for the settle rule (see settled_out), not for
+    `closed_at` rides along for the closeout display, not for
     the strip. It is here rather than in its own query because this one
     already visits the same rows for the same list, and a second SELECT to
     fetch one more column off the same table is a round trip bought for
@@ -1100,60 +1162,6 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool,
 
 # How long a closed leg stays in the list after it closes out. Half an
 # hour is roughly the walk off the aeroplane and down the concourse: long
-# enough that someone who got the landing notification and reached for
-# their phone still finds the flight they came to look at, short enough
-# that a four-leg day does not end as four rows about the past and one
-# about the present.
-LEG_SETTLE = timedelta(minutes=30)
-
-
-def settled_out(leg_ids: list, times_by_leg: Optional[dict], now: datetime) -> set:
-    """Which legs have finished settling and should leave the list.
-
-    A leg drops LEG_SETTLE after its CLOSEOUT, not after its scheduled
-    arrival. Those are different instants and the difference is the whole
-    point: closeout is the app concluding the flight is genuinely over
-    (see CLOSURE), whereas a scheduled arrival is a guess that a two-hour
-    delay makes a lie. Dropping on the schedule would clear a leg off the
-    list while the aeroplane was still at altitude.
-
-    A leg with no closeout NEVER drops, however old. The absence of a
-    closeout means the app does not know how the flight ended, and
-    quietly removing it would present that as resolved.
-
-    THE LAST REMAINING LEG NEVER DROPS. If it did, the list would empty
-    itself thirty minutes after the final landing and stay empty for the
-    rest of the ten-hour handover — the exact window in which someone is
-    most likely to open the app to check he got in. This is why the
-    function takes the whole list rather than being asked leg by leg: "is
-    this one still needed" cannot be answered without knowing what else
-    is left, and a per-leg version of this rule would have emptied the
-    page.
-    """
-    if not times_by_leg:
-        return set()
-    drop = set()
-    for lid in leg_ids:
-        row = times_by_leg.get(lid)
-        if row is None or not row["closed"]:
-            continue
-        closed_at = _parse_iso(row["closed_at"] if "closed_at" in row.keys() else None)
-        if closed_at is None:
-            continue
-        # A stored timestamp with no zone is UTC — that is what closure.py
-        # writes. Comparing it to an aware `now` raises rather than
-        # returning False, so this cannot be left to chance.
-        if closed_at.tzinfo is None:
-            closed_at = closed_at.replace(tzinfo=ZoneInfo("UTC"))
-        if now - closed_at >= LEG_SETTLE:
-            drop.add(lid)
-    # Never empty the list. Give back the newest thing dropped rather than
-    # picking an arbitrary survivor, so what remains is the leg he most
-    # recently finished.
-    if drop and len(drop) == len(leg_ids):
-        drop.discard(leg_ids[-1])
-    return drop
-
 
 def build_flight_list(info, day_numbers: dict, now: datetime, time_format: str,
                       tags_by_leg, overnights: dict,
@@ -1195,13 +1203,27 @@ def build_flight_list(info, day_numbers: dict, now: datetime, time_format: str,
     if window is not None:
         ordered = [l for l in ordered if l.id in window]
 
-    # SETTLED LEGS LEAVE (1.17.0). Applied AFTER the trip window, not
-    # before, so "the last remaining leg" means the last one of this trip
-    # rather than the last on the roster. The live leg is never dropped
-    # because a live leg is not closed.
-    dropped = settled_out([l.id for l in ordered], times_by_leg, now)
-    if dropped:
-        ordered = [l for l in ordered if l.id not in dropped]
+    # NOTHING ELSE LEAVES (1.25.1, reversing 1.17.0).
+    #
+    # 1.17.0 dropped a leg thirty minutes after its closeout, so that "a
+    # four-leg day does not end as four rows about the past and one about
+    # the present". The reasoning was sound and the result was wrong: on a
+    # four-leg day the first three legs vanished one by one, and by the
+    # last sector the page had no answer to the question it exists for —
+    # how much of today has he already done. The owner noticed the flown
+    # legs had "disappeared at some point" without knowing when, which is
+    # exactly how a slow drip of removals reads from outside.
+    #
+    # The crowding worry was real but it was a SCROLL problem, not a
+    # content problem, and startAtCurrent() in viewer.html already solved
+    # it: the list opens positioned on the live leg, so the flown ones sit
+    # above the fold where someone can scroll up to them and nobody has to
+    # scroll past them. Deleting rows to avoid scrolling past them was
+    # solving it twice, and the second solution destroyed information.
+    #
+    # The trip window above is now the ONLY filter. Legs of THIS trip stay
+    # until the trip does; legs of older trips were already gone and
+    # belong to the calendar.
 
     groups = group_legs_by_day(ordered, day_numbers, now, time_format,
                                tags_by_leg, overnights, times_by_leg)
@@ -1294,67 +1316,31 @@ async def viewer(request: Request, leg: Optional[str] = None):
     return HTMLResponse(template.render(**ctx))
 
 
-@app.get("/viewer-settings", response_class=HTMLResponse)
-async def viewer_settings_get(request: Request):
-    """Viewers get the SAME settings page as pilots, minus what they can't own.
+# ---------------------------------------------------------------------------
+# /viewer-settings — KEPT ONLY AS A REDIRECT (1.25.2)
+#
+# Settings used to live at two URLs, one per kind of user, and that split
+# is what logged a viewer out: the tab bar pointed everyone at /settings,
+# /settings was pilot-only, so a family member tapping Settings was bounced
+# to /login and asked for the tracker code again.
+#
+# The route is gone, not the address. A viewer who bookmarked this page or
+# reaches for the back button should land on settings, not on a 404 — and
+# they have no way to know the app reorganised itself.
+#
+# 307, not 303, on the POST: 303 would rewrite it to a GET and silently
+# discard the form. 307 preserves the method and the body, so an old page
+# still open in a tab saves correctly instead of appearing to do nothing.
+# ---------------------------------------------------------------------------
 
-    There used to be a second template, viewer_settings.html, holding a
-    stripped copy of the display controls. Two files meant two chances to
-    drift, and they already had: the pilot form named its checkbox
-    show_flightaware while the viewer form called it show_fa. One template
-    now, with the pilot-only sections behind {% if is_pilot %} — the API
-    key, the poll interval, account recovery — and the admin roster behind
-    is_admin on top of that.
-
-    Storage still differs and should: a pilot's settings live in the
-    database and follow their account, a viewer's live in a cookie on the
-    device in front of them. Only the form's action changes.
-    """
-    pilot = current_pilot(request)
-    viewer_uid = None if pilot else current_viewer_user_id(request)
-    if not pilot and not viewer_uid:
-        return RedirectResponse(url="/login", status_code=303)
-    theme = request.cookies.get("pt_viewer_theme", "dark")
-    tf = request.cookies.get("pt_viewer_tf", "24")
-    if theme not in ("dark", "light"):
-        theme = "dark"
-    if tf not in ("12", "24"):
-        tf = "24"
-    view_settings = SimpleNamespace(
-        theme=theme,
-        time_format=tf,
-        show_flightaware=request.cookies.get("pt_viewer_show_fa", "1") == "1",
-        show_fr24=request.cookies.get("pt_viewer_show_fr24", "1") == "1",
-    )
-    template = jinja_env.get_template("settings.html")
-    return HTMLResponse(template.render(
-        request=request, s=view_settings, saved=False,
-        is_pilot=False, is_admin=False, active_tab="settings",
-        post_to="/viewer-settings",
-    ))
+@app.get("/viewer-settings")
+async def viewer_settings_moved():
+    return RedirectResponse(url="/settings", status_code=308)
 
 
 @app.post("/viewer-settings")
-async def viewer_settings_post(
-    request: Request,
-    theme: str = Form("dark"),
-    time_format: str = Form("24"),
-    # Renamed from show_fa to match the pilot form now that both post from
-    # the same template. The COOKIE name is unchanged, so nobody's saved
-    # preference resets on upgrade.
-    show_flightaware: Optional[str] = Form(None),
-    show_fr24: Optional[str] = Form(None),
-):
-    pilot = current_pilot(request)
-    viewer_uid = None if pilot else current_viewer_user_id(request)
-    if not pilot and not viewer_uid:
-        return RedirectResponse(url="/login", status_code=303)
-    resp = RedirectResponse(url="/", status_code=303)
-    resp.set_cookie("pt_viewer_theme", "light" if theme == "light" else "dark", max_age=60 * 60 * 24 * 365)
-    resp.set_cookie("pt_viewer_tf", "12" if time_format == "12" else "24", max_age=60 * 60 * 24 * 365)
-    resp.set_cookie("pt_viewer_show_fa", "1" if show_flightaware is not None else "0", max_age=60 * 60 * 24 * 365)
-    resp.set_cookie("pt_viewer_show_fr24", "1" if show_fr24 is not None else "0", max_age=60 * 60 * 24 * 365)
-    return resp
+async def viewer_settings_moved_post():
+    return RedirectResponse(url="/settings", status_code=307)
 
 
 # ---------------------------------------------------------------------------
@@ -2401,17 +2387,152 @@ def poller_status(time_format: str = "24") -> dict:
     }
 
 
+def settings_previews(s, aeroapi_stats=None, account=None) -> dict:
+    """The one-line summary each COLLAPSED settings row shows on its right.
+
+    This is the whole reason a page of closed rows is not a page of
+    nothing. "Theme & colour" is a promise; "Theme & colour ... Dark,
+    Indigo" is an answer, and answers are what make a short page dense
+    rather than sparse.
+
+    Built on the SERVER, deliberately (roadmap P1-5, keep the client
+    dumb). The alternative is JavaScript reading the form's own inputs to
+    describe them, which means the summary is blank until a script runs
+    and wrong the moment a control is renamed.
+
+    Every string here is short by contract: .grow-value ellipsises rather
+    than wrapping, because a row that grows a second line for a long value
+    makes the whole list ragged.
+    """
+    out = {}
+    out["appearance"] = "{}, {}".format(
+        "Light" if s.theme == "light" else "Dark",
+        ACCENTS.get(getattr(s, "accent", DEFAULT_ACCENT), ACCENTS[DEFAULT_ACCENT]),
+    )
+    clock = "12-hour" if s.time_format == "12" else "24-hour"
+    icon = ICON_STYLES.get(getattr(s, "icon_style", ""), "")
+    out["display"] = "{}, {}".format(clock, icon) if icon else clock
+
+    links = [n for n, on in (("FlightAware", s.show_flightaware),
+                             ("FR24", s.show_fr24)) if on]
+    tracking = ", ".join(links) if links else "No links"
+    if getattr(s, "poll_seconds", None):
+        tracking = "Every {}s, {}".format(s.poll_seconds, tracking)
+    out["tracking"] = tracking
+
+    # The spend figure is the point of this row, so it leads. Without a
+    # reading yet, say the limit rather than inventing a zero — "$0.00 of
+    # $4.90" reads as a measurement and would be a guess.
+    if not getattr(s, "aeroapi_enabled", False):
+        out["airline"] = "Off"
+    elif aeroapi_stats and aeroapi_stats.get("has_reading"):
+        out["airline"] = "${:.2f} of ${:.2f}".format(
+            aeroapi_stats.get("spent", 0.0), aeroapi_stats.get("budget", 0.0))
+    else:
+        out["airline"] = "On, limit ${:.2f}".format(
+            (aeroapi_stats or {}).get("budget", 0.0))
+
+    if account:
+        out["account"] = account.get("username") or ""
+    return out
+
+
+def viewer_settings_from_cookies(request: Request):
+    """A viewer's display preferences, read from their device.
+
+    THE ONLY PLACE THESE COOKIE NAMES ARE READ FOR THE FORM. They are also
+    read by viewer_display_overrides, which answers a different question
+    ("what should this page look like") for every page. This one answers
+    "what should the form show as selected". Both must agree, and 1.19.0 is
+    what happens when two readers of one rule drift: a viewer's theme was
+    honoured and their clock ignored, on the same page, because the tracker
+    had its own inline copy of the override.
+
+    Storage differs from a pilot's and should: a pilot's settings live in
+    the database and follow their account, a viewer's live on the device in
+    front of them because a viewer has no account to hang them on. That is
+    a real difference. Having two URLs was not.
+    """
+    theme = request.cookies.get("pt_viewer_theme", "dark")
+    tf = request.cookies.get("pt_viewer_tf", "24")
+    accent = request.cookies.get("pt_viewer_accent", DEFAULT_ACCENT)
+    return SimpleNamespace(
+        theme=theme if theme in ("dark", "light") else "dark",
+        accent=accent if accent in ACCENTS else DEFAULT_ACCENT,
+        time_format=tf if tf in ("12", "24") else "24",
+        show_flightaware=request.cookies.get("pt_viewer_show_fa", "1") == "1",
+        show_fr24=request.cookies.get("pt_viewer_show_fr24", "1") == "1",
+    )
+
+
+def _settings_context(request: Request, pilot) -> dict:
+    """Everything settings.html needs, for EITHER kind of user. (1.25.2)
+
+    ONE CONTEXT BUILDER, because there is one page. Settings used to be two
+    routes at two URLs, and the split is what logged a viewer out — the tab
+    bar could only point at one of them, so it pointed at the pilot's and
+    bounced everyone else to a login screen.
+
+    The template was merged in 1.3.0 and a test has kept it merged since.
+    Only the routes stayed split, and only because storage differs. That
+    difference is four lines, not a second URL.
+
+    `pilot` is None for a viewer. Everything a viewer cannot own — the API
+    key, the poll interval, the account fields, recovery, admin — is absent
+    from this dict AND gated behind {% if is_pilot %} in the template. Both,
+    deliberately: the gate is what a reader sees, the absence is what stops
+    a missing gate leaking anything.
+    """
+    if pilot is None:
+        s = viewer_settings_from_cookies(request)
+        return {
+            "request": request, "s": s, "is_admin": False, "is_pilot": False,
+            "accents": ACCENTS, "active_tab": "settings", "account": None,
+            "preview": settings_previews(s),
+            "open_group": "", "notice": "", "error": "",
+        }
+    s = load_settings(pilot["id"])
+    stats = budget_state(pilot["id"])
+    account = {"username": pilot["username"], "email": pilot["email"] or ""}
+    return {
+        "request": request, "s": s, "is_admin": bool(pilot["is_admin"]),
+        "is_pilot": True,
+        "icon_styles": ICON_STYLES, "accents": ACCENTS,
+        "pilot_id": pilot["id"], "aeroapi_stats": stats,
+        "poller": poller_status(s.time_format), "active_tab": "settings",
+        "account": account,
+        "preview": settings_previews(s, stats, account),
+        # Which group to reopen after a redirect. A password error that
+        # returns you to a page with every row shut, and the message
+        # hidden inside one of them, reads as the form having done
+        # nothing at all.
+        "open_group": "",
+        "notice": "", "error": "",
+    }
+
+
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
-    pilot = require_pilot(request)
-    if isinstance(pilot, RedirectResponse):
-        return pilot
-    s = load_settings(pilot["id"])
+    """One settings URL, for everyone who is signed in at all. (1.25.2)
+
+    Resolved exactly the way / and /calendar already resolve it: pilot
+    first, then viewer, then out. Those two pages have served both kinds of
+    user from one route since the beginning; settings was the last page
+    that did not, and it was the one that broke.
+    """
+    pilot = current_pilot(request)
+    if not pilot and not current_viewer_user_id(request):
+        return RedirectResponse(url="/login", status_code=303)
+    ctx = _settings_context(request, pilot)
+    # FLASH, then clear. The three POST routes redirect here rather than
+    # rendering their own copy of the page (POST-redirect-GET), so that a
+    # pull-to-refresh after saving re-reads the page instead of asking the
+    # phone to resubmit the form. Re-submitting a password change is not a
+    # harmless thing to offer somebody.
+    ctx["notice"] = request.session.pop("_settings_notice", "")
+    ctx["error"] = request.session.pop("_settings_error", "")
+    ctx["open_group"] = request.session.pop("_settings_open", "")
     template = jinja_env.get_template("settings.html")
-    ctx = {"request": request, "s": s, "saved": False, "is_admin": bool(pilot["is_admin"]),
-           "is_pilot": True, "post_to": "/settings", "icon_styles": ICON_STYLES,
-           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
-           "poller": poller_status(s.time_format), "active_tab": "settings"}
     # NO all_users here any more (1.6.0). Administering the install moved
     # to /admin in one piece; leaving a second copy of the people table
     # behind would mean two places to keep in step and two places to check
@@ -2444,14 +2565,43 @@ async def settings_save(
     aeroapi_budget: str = Form(""),
     time_format: str = Form("24"),
     theme: str = Form("dark"),
+    accent: str = Form("indigo"),
     poll_seconds: int = Form(15),
     show_flightaware: Optional[str] = Form(None),
     show_fr24: Optional[str] = Form(None),
     icon_style: str = Form("modern"),
 ):
-    pilot = require_pilot(request)
-    if isinstance(pilot, RedirectResponse):
-        return pilot
+    pilot = current_pilot(request)
+    if not pilot:
+        # A VIEWER SAVING THE SAME FORM. (1.25.2)
+        #
+        # Their preferences go to cookies on the device in front of them,
+        # because a viewer has no account to hang them on. That is the
+        # whole of the difference between the two users on this page —
+        # four fields and where they are written — and it did not justify a
+        # second URL, which is what sent family members to a login screen.
+        #
+        # The fields a viewer cannot own are not read at all here. The
+        # template does not render them, but a form can be posted by hand,
+        # and "the input wasn't on the page" is not access control.
+        if not current_viewer_user_id(request):
+            return RedirectResponse(url="/login", status_code=303)
+        request.session["_settings_notice"] = "Settings saved."
+        # BACK TO /settings, not to /. It used to bounce a viewer to the
+        # tracker after saving, so the one way to check a change had taken
+        # was to navigate back and look — and a viewer who wanted to change
+        # two things had to make the round trip twice.
+        resp = RedirectResponse(url="/settings", status_code=303)
+        year = 60 * 60 * 24 * 365
+        # Cookie NAMES are unchanged from when this was its own route, so
+        # nobody's saved preference resets on upgrade.
+        resp.set_cookie("pt_viewer_theme", "light" if theme == "light" else "dark", max_age=year)
+        resp.set_cookie("pt_viewer_accent",
+                        accent if accent in ACCENTS else DEFAULT_ACCENT, max_age=year)
+        resp.set_cookie("pt_viewer_tf", "12" if time_format == "12" else "24", max_age=year)
+        resp.set_cookie("pt_viewer_show_fa", "1" if show_flightaware is not None else "0", max_age=year)
+        resp.set_cookie("pt_viewer_show_fr24", "1" if show_fr24 is not None else "0", max_age=year)
+        return resp
     s = AppSettings(
         aeroapi_enabled=bool(aeroapi_enabled),
         # A blank key with the toggle on means "keep what's stored" — the
@@ -2467,6 +2617,11 @@ async def settings_save(
         aeroapi_budget=_clean_budget(aeroapi_budget, load_settings(pilot["id"]).aeroapi_budget),
         time_format="12" if time_format == "12" else "24",
         theme="light" if theme == "light" else "dark",
+        # Checked against the known set for the same reason icon_style is:
+        # this lands in a data-accent attribute, and an unrecognised value
+        # matches no CSS block and falls back silently — which the pilot
+        # reads as "the setting didn't save", not as "that isn't a colour".
+        accent=accent if accent in ACCENTS else DEFAULT_ACCENT,
         poll_seconds=max(10, min(300, int(poll_seconds))),
         show_flightaware=show_flightaware is not None,
         show_fr24=show_fr24 is not None,
@@ -2477,16 +2632,112 @@ async def settings_save(
         icon_style=icon_style if icon_style in ICON_STYLES else "modern",
     )
     save_settings(pilot["id"], s)
-    template = jinja_env.get_template("settings.html")
-    ctx = {"request": request, "s": s, "saved": True, "is_admin": bool(pilot["is_admin"]),
-           "is_pilot": True, "post_to": "/settings", "icon_styles": ICON_STYLES,
-           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
-           "poller": poller_status(s.time_format), "active_tab": "settings"}
-    # NO all_users here any more (1.6.0). Administering the install moved
-    # to /admin in one piece; leaving a second copy of the people table
-    # behind would mean two places to keep in step and two places to check
-    # when something looks wrong.
-    return HTMLResponse(template.render(**ctx))
+    request.session["_settings_notice"] = "Settings saved."
+    return RedirectResponse(url="/settings", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Personal information (1.25.0)
+#
+# Username and email were collected at registration and then unreachable
+# forever, and the ONLY route to a new password was the forgot-password
+# flow — which means the way to change a password you know was to pretend
+# you had lost it. These two routes close both gaps.
+#
+# Kept SEPARATE from the preferences form on purpose. A preferences save is
+# cheap and idempotent; changing a username or a password is neither, and
+# putting them in one submit means every theme change re-validates
+# credentials and every credential failure discards a theme change.
+# ---------------------------------------------------------------------------
+
+@app.post("/settings/account")
+async def settings_account_save(
+    request: Request,
+    username: str = Form(""),
+    email: str = Form(""),
+):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    request.session["_settings_open"] = "account"
+    new_username = username.strip()
+    new_email = email.strip()
+
+    if len(new_username) < 3:
+        request.session["_settings_error"] = "A username needs at least 3 characters."
+        return RedirectResponse(url="/settings", status_code=303)
+    # Case-insensitively, because "Dave" and "dave" being two accounts on a
+    # household install is a trap rather than a feature. Compared against
+    # OTHER rows only — saving the form without touching the name must not
+    # report your own username as taken.
+    conn = get_connection()
+    try:
+        clash = conn.execute(
+            "SELECT 1 FROM users WHERE lower(username) = lower(?) AND id != ?",
+            (new_username, pilot["id"]),
+        ).fetchone()
+        if clash:
+            request.session["_settings_error"] = "That username is already taken."
+            return RedirectResponse(url="/settings", status_code=303)
+        conn.execute("UPDATE users SET username = ?, email = ? WHERE id = ?",
+                     (new_username, new_email, pilot["id"]))
+        conn.commit()
+    finally:
+        conn.close()
+
+    # THE SESSION KEYS ON user_id, NOT ON THE NAME, so a rename cannot log
+    # the pilot out. Checked rather than assumed: a session carrying the
+    # username would have signed them out on the very next request, and an
+    # account that works but says "please log in" is indistinguishable from
+    # a broken one.
+    request.session["_settings_open"] = ""
+    request.session["_settings_notice"] = "Your details were saved."
+    return RedirectResponse(url="/settings", status_code=303)
+
+
+@app.post("/settings/password")
+async def settings_password_change(
+    request: Request,
+    current_password: str = Form(""),
+    new_password: str = Form(""),
+    confirm_password: str = Form(""),
+):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    request.session["_settings_open"] = "password"
+
+    # Rate limited like every other password path. Being logged in is not a
+    # reason to allow unlimited guesses at the CURRENT password — a phone
+    # left unlocked on a galley counter is exactly the case this covers.
+    if not check_rate_limit(request, "change_password", max_attempts=8, window_seconds=600):
+        request.session["_settings_error"] = "Too many attempts. Try again in a few minutes."
+        return RedirectResponse(url="/settings", status_code=303)
+
+    if not verify_password(current_password, pilot["password_hash"]):
+        request.session["_settings_error"] = "That current password is not right."
+        return RedirectResponse(url="/settings", status_code=303)
+    if len(new_password) < 8:
+        request.session["_settings_error"] = "A new password needs at least 8 characters."
+        return RedirectResponse(url="/settings", status_code=303)
+    if new_password != confirm_password:
+        request.session["_settings_error"] = "The two new passwords do not match."
+        return RedirectResponse(url="/settings", status_code=303)
+
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?",
+                     (hash_password(new_password), pilot["id"]))
+        conn.commit()
+    finally:
+        conn.close()
+    # The recovery code is NOT rotated here. It is a separate secret with a
+    # separate button, and silently retiring the code a pilot has written
+    # down would mean a routine password change quietly destroyed their way
+    # back in.
+    request.session["_settings_open"] = ""
+    request.session["_settings_notice"] = "Your password was changed."
+    return RedirectResponse(url="/settings", status_code=303)
 
 
 @app.post("/settings/users/delete/{user_id}")
@@ -2514,6 +2765,29 @@ ICON_STYLES = {
     "delta":   "Delta",
 }
 DEFAULT_ICON_STYLE = "modern"
+
+# The accent hues a user can choose between (1.25.0). Keys ONLY — the actual
+# colours live in static/app.css, one hex each, where the contrast test can
+# read them. Putting values here too would be a second copy of the palette,
+# which is the failure v5.9 spent a release undoing.
+#
+# Order is the order the swatches appear. Adding one means a block in
+# app.css and an entry here; the suite then checks its contrast
+# automatically and fails rather than shipping something unreadable.
+#
+# No red, green, orange or pink, and that is not caution: those hues
+# already mean late, early and caution on the strips (invariant 28), so an
+# accent sharing one makes a button look like a delay.
+ACCENTS = {
+    "indigo":  "Indigo",
+    "blue":    "Blue",
+    "cyan":    "Cyan",
+    "violet":  "Violet",
+    "fuchsia": "Fuchsia",
+    "pink":    "Pink",
+    "slate":   "Slate",
+}
+DEFAULT_ACCENT = "indigo"
 
 
 def _icon_style_for(request: Request) -> str:
