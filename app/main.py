@@ -4,6 +4,7 @@ from fastapi.responses import (HTMLResponse, RedirectResponse, JSONResponse,
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from pathlib import Path
+import base64
 import json
 import os
 import re
@@ -51,6 +52,7 @@ FLASHES = {
 FLASH_KIND = {"promoted": "good", "demoted": "good"}
 from .ratelimit import check_rate_limit
 from . import debuglog
+from . import radar_proxy
 from .version import VERSION, API_VERSION, MIN_CLIENT_VERSION, client_is_supported
 
 BASE = Path(__file__).resolve().parent.parent
@@ -2887,6 +2889,47 @@ async def web_manifest(request: Request):
              "type": "image/png", "purpose": "maskable"},
         ],
     }, media_type="application/manifest+json")
+
+
+
+# A 1x1 transparent PNG. Leaflet is happy to scale it, and an empty tile
+# reads as "no radar here" rather than as a broken image.
+_EMPTY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
+    "YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+@app.get("/radar/wms")
+async def radar_wms(request: Request):
+    """Radar tiles, fetched from IEM and filtered before they are served.
+
+    Sits in front of IEM rather than letting the browser talk to it
+    directly, so the clear-air filtering can happen somewhere it can be
+    tested — see app/radar_proxy.py for why that mattered.
+
+    `min` is ours and is stripped here; everything else is passed
+    through untouched, so this stays a proxy rather than a second place
+    that knows what a WMS request looks like.
+
+    A radar outage returns an empty PNG, not an error. The map is the
+    point of the page and it must not break because a weather service is
+    down.
+    """
+    params = dict(request.query_params)
+    try:
+        min_level = int(params.pop("min", "0") or 0)
+    except ValueError:
+        min_level = 0
+
+    body = radar_proxy.get_tile(params, min_level)
+    if body is None:
+        return Response(content=_EMPTY_PNG, media_type="image/png",
+                        headers={"Cache-Control": "no-store"})
+    # Radar refreshes every five minutes, so a few minutes of browser
+    # cache costs nothing in freshness and saves this box a great many
+    # repeat fetches while somebody pans around.
+    return Response(content=body, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=180"})
 
 
 @app.get("/sw.js")

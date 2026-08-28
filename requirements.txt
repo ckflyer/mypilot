@@ -6,4 +6,7 @@ pydantic>=2
 jinja2
 tzdata
 requests
+# Pillow: the radar proxy filters tiles with it (app/radar_proxy.py). Without
+# this the container starts fine and the radar 500s on the first tile.
+Pillow
 itsdangerous

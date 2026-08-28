@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.27.2 -->
+<!-- BUILT_FOR 1.28.0 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -866,20 +866,17 @@
         <label><input type="checkbox" id="toggle-overlay" checked> Live data overlay</label>
         {% endif %}
         <label><input type="checkbox" id="toggle-radar" checked> Weather radar</label>
-        {#- The sensitivity control sits UNDER the radar toggle and is
-            indented, because it is a property of the radar rather than a
-            layer of its own. Hidden entirely when the browser will not
-            let us read the radar pixels — a control that cannot do
-            anything is worse than no control. -#}
-        <label class="map-settings-sub" id="radar-level-row">
-          <span>Sensitivity</span>
-          <select id="radar-level">
-            <option value="0">Show everything</option>
-            <option value="2">Hide light returns</option>
-            <option value="3">Moderate and above</option>
-            <option value="4">Heavy only</option>
-          </select>
-        </label>
+        {#- Sensitivity sits UNDER the radar toggle and indented, because
+            it is a property of the radar rather than a layer of its own.
+            A slider rather than a dropdown: the settings are ordered
+            least-to-most aggressive, so the control should look ordered
+            too, and one drag beats open-pick-close on a phone. -#}
+        <div class="map-settings-sub">
+          <label for="radar-level">Sensitivity</label>
+          <input type="range" id="radar-level" min="0" max="3" step="1" value="0"
+                 aria-describedby="radar-level-label">
+          <span class="map-settings-subval" id="radar-level-label">Show everything</span>
+        </div>
       </div>
       <button type="button" class="map-recenter-btn" id="map-recenter-btn" title="Recenter map" aria-label="Recenter map">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1323,27 +1320,36 @@
       // first) so the very first tiles are already filtered — switching
       // afterwards would flash the unfiltered noise the setting exists to
       // get rid of.
-      // DEFAULTS TO FILTERING, NOT TO RAW (1.27.2). This shipped
-      // defaulting to "show everything", which meant the feature did
-      // nothing until somebody found the control — and the control was
-      // behind a button that could not be pressed, so in practice it did
-      // nothing at all. The reason the filter exists is that clear-air
-      // return covers whole states on a dry day and is not weather, so
-      // hiding it is the right thing to do before being asked. Anyone
-      // who wants the raw picture can still choose it, and the choice
-      // sticks.
+      // SENSITIVITY. The slider is an INDEX into PT_RADAR.STOPS, not the
+      // threshold itself — the thresholds are not contiguous (0, 2, 3, 4)
+      // and a slider has to move in even steps. Storing the index also
+      // means the stops can be retuned later without a saved preference
+      // suddenly meaning something different.
+      //
+      // Defaults to 0, showing the raw picture. Filtering is offered, not
+      // imposed: the unfiltered radar is what the data actually says, and
+      // 1.27.2 turning it on by default was making that choice for
+      // everyone.
+      //
+      // Read here, before the map is built, so the first tiles already
+      // carry the right threshold instead of loading twice.
       var levelSel = document.getElementById('radar-level');
-      var stored = localStorage.getItem('pt_radar_level');
-      var levelPref = parseInt(stored === null ? '2' : stored, 10);
-      if (!(levelPref >= 0)) levelPref = 2;
+      var levelLabel = document.getElementById('radar-level-label');
+      var stops = (window.PT_RADAR && PT_RADAR.STOPS) || [{ min: 0, label: '' }];
+      var idx = parseInt(localStorage.getItem('pt_radar_stop') || '0', 10);
+      if (!(idx >= 0 && idx < stops.length)) idx = 0;
+      var levelPref = stops[idx].min;
+
       if (levelSel) {
-        levelSel.value = String(levelPref);
-        levelSel.addEventListener('change', function() {
-          var v = parseInt(levelSel.value, 10) || 0;
-          localStorage.setItem('pt_radar_level', String(v));
-          if (window._ptRadarLayer && window._ptRadarLayer.setMinLevel) {
-            window._ptRadarLayer.setMinLevel(v);
-          }
+        levelSel.max = String(stops.length - 1);
+        levelSel.value = String(idx);
+        if (levelLabel) levelLabel.textContent = stops[idx].label;
+        levelSel.addEventListener('input', function() {
+          var i = parseInt(levelSel.value, 10) || 0;
+          if (!(i >= 0 && i < stops.length)) i = 0;
+          if (levelLabel) levelLabel.textContent = stops[i].label;
+          localStorage.setItem('pt_radar_stop', String(i));
+          if (window._ptRadarLayer) PT_RADAR.setMin(window._ptRadarLayer, stops[i].min);
         });
       }
       window._ptRadarLevel = levelPref;
@@ -1812,18 +1818,9 @@
       // attribution moved into that file with it.
       const radarLayer = PT_RADAR.create({
         opacity: window._ptRadarPrefOff ? 0 : 0.55,
-        minLevel: window._ptRadarLevel || 0
+        min: window._ptRadarLevel || 0
       }).addTo(map);
       window._ptRadarLayer = radarLayer;
-
-      // The filter needs to read the radar image's pixels back out, which
-      // a browser only permits if the tile server allows cross-origin
-      // reads. If it does not, the radar still draws — unfiltered — and
-      // the control removes itself rather than sitting there inert.
-      map.on('radarfilterblocked', function() {
-        const row = document.getElementById('radar-level-row');
-        if (row) row.hidden = true;
-      });
 
       let originMarker = null, destMarker = null, remainingLine = null, flownLine = null, planeMarker = null;
       let lastFitPts = [];
