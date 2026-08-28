@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.27.1 -->
+<!-- BUILT_FOR 1.27.2 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -31,6 +31,29 @@
       line-height: 1.4;
     }
     h1 { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--muted); }
+    /* THE TOPBAR IS A LABEL, NOT A LID (1.27.2).
+     *
+     * This is a full-width 46px strip at z-index 40 holding one piece of
+     * text. Because it is a block, it caught every tap across its whole
+     * width — including the map's settings button, which the numbers put
+     * squarely underneath it:
+     *
+     *     body padding-top   16px  (max(1rem, safe-area))
+     *     topbar band        16 -> 62
+     *     settings button    24 -> 58   entirely inside it
+     *     recenter button    66 -> 100  just clear of it
+     *
+     * Which is exactly the reported symptom: settings dead on both
+     * desktop and phone, recenter fine, eight pixels lower. Nothing
+     * looked wrong because the strip is transparent apart from the word
+     * MyPilot, and z-index 40 beats the HUD's 5 so the tap never got
+     * close.
+     *
+     * Same pattern as .map-hud above: the container stops hit-testing and
+     * its real children opt back in, so the text and any buttons the
+     * topbar carries on other pages still work while the empty space
+     * stops behaving like a pane of glass over the map.
+     */
     .topbar {
       display: flex;
       align-items: center;
@@ -40,7 +63,9 @@
       margin-bottom: 0;
       position: relative;
       z-index: 40;
+      pointer-events: none;
     }
+    .topbar > * { pointer-events: auto; }
     .brand {
       font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em;
       /* Legible over whatever the map happens to be showing, without a
@@ -1298,9 +1323,19 @@
       // first) so the very first tiles are already filtered — switching
       // afterwards would flash the unfiltered noise the setting exists to
       // get rid of.
+      // DEFAULTS TO FILTERING, NOT TO RAW (1.27.2). This shipped
+      // defaulting to "show everything", which meant the feature did
+      // nothing until somebody found the control — and the control was
+      // behind a button that could not be pressed, so in practice it did
+      // nothing at all. The reason the filter exists is that clear-air
+      // return covers whole states on a dry day and is not weather, so
+      // hiding it is the right thing to do before being asked. Anyone
+      // who wants the raw picture can still choose it, and the choice
+      // sticks.
       var levelSel = document.getElementById('radar-level');
-      var levelPref = parseInt(localStorage.getItem('pt_radar_level') || '0', 10);
-      if (!(levelPref >= 0)) levelPref = 0;
+      var stored = localStorage.getItem('pt_radar_level');
+      var levelPref = parseInt(stored === null ? '2' : stored, 10);
+      if (!(levelPref >= 0)) levelPref = 2;
       if (levelSel) {
         levelSel.value = String(levelPref);
         levelSel.addEventListener('change', function() {
