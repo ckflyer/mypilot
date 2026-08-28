@@ -44,6 +44,7 @@ const SHELL = [
   '/static/vendor/maplibre/maplibre-gl.js',
   '/static/vendor/maplibre/leaflet-maplibre-gl.js',
   '/static/basemap.js',
+  '/static/radar.js',
   '/static/vendor/Sortable.min.js',
   '/static/icon-192.png',
   '/static/favicon-32x32.png'

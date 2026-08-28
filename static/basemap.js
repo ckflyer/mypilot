@@ -34,6 +34,28 @@
  * The cost is MapLibre GL, which needs WebGL. Every browser since about
  * 2013 has it, but "almost every" is not "every", so there is a raster
  * fallback below. A plain map beats no map.
+ * THE VENDORED VERSIONS ARE A MATCHED PAIR — DO NOT BUMP ONE ALONE.
+ *
+ * static/vendor/maplibre/ holds maplibre-gl 5.24.0 and
+ * @maplibre/maplibre-gl-leaflet 0.1.4. The binding declares which
+ * maplibre-gl majors it supports, and 1.26.0 shipped a pair that did not
+ * match: binding 0.0.22 (good for maplibre-gl 2, 3 and 4) against
+ * maplibre-gl 5.
+ *
+ * It did not fail loudly. Nothing threw and the console stayed clean.
+ * The old binding synced the two maps by writing straight into
+ * maplibre's internals — gl.transform.center and gl.transform.zoom —
+ * and in v5 those writes no longer trigger a repaint. So one-finger
+ * panning, which goes through that path, left the basemap frozen while
+ * the radar and flight path slid over the top of it. Pinch-zoom looked
+ * fine, because that path happened to call the PUBLIC jumpTo() instead.
+ * A bug that only appears on one of two gestures is exactly the kind
+ * that survives testing.
+ *
+ * 0.1.4 uses jumpTo() everywhere and lists ^5.0.0 among its supported
+ * peers. If either file is ever updated, check the binding's
+ * peerDependencies against the maplibre-gl version in the same folder,
+ * and then PAN WITH ONE FINGER before believing it works.
  */
 (function () {
   'use strict';

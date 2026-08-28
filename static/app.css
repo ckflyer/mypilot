@@ -916,3 +916,18 @@ body { padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important; }
 .swatch[data-key="fuchsia"] .swatch-dot { background: var(--a-fuchsia-dk); }
 .swatch[data-key="pink"]    .swatch-dot { background: var(--a-pink-dk); }
 .swatch[data-key="slate"]   .swatch-dot { background: var(--a-slate-dk); }
+
+
+/* The radar sensitivity row inside the map-settings popover. Indented and
+   set on one line because it belongs TO the radar toggle above it rather
+   than beside it — a second full-width control would read as a second
+   layer. (1.27.0) */
+.map-settings-sub {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.5rem; padding-left: 1.5rem; font-size: 0.8125rem;
+}
+.map-settings-sub select {
+  font: inherit; padding: 0.15rem 0.3rem; border-radius: 6px;
+  background: var(--input-bg); color: inherit;
+  border: 1px solid var(--border);
+}

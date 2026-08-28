@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.26.1 -->
+<!-- BUILT_FOR 1.27.0 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -18,6 +18,7 @@
   <script src="/static/vendor/maplibre/maplibre-gl.js?v={{ version }}"></script>
   <script src="/static/vendor/maplibre/leaflet-maplibre-gl.js?v={{ version }}"></script>
   <script src="/static/basemap.js?v={{ version }}"></script>
+  <script src="/static/radar.js?v={{ version }}"></script>
   <link rel="stylesheet" href="/static/app.css?v={{ version }}">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -840,6 +841,20 @@
         <label><input type="checkbox" id="toggle-overlay" checked> Live data overlay</label>
         {% endif %}
         <label><input type="checkbox" id="toggle-radar" checked> Weather radar</label>
+        {#- The sensitivity control sits UNDER the radar toggle and is
+            indented, because it is a property of the radar rather than a
+            layer of its own. Hidden entirely when the browser will not
+            let us read the radar pixels — a control that cannot do
+            anything is worse than no control. -#}
+        <label class="map-settings-sub" id="radar-level-row">
+          <span>Sensitivity</span>
+          <select id="radar-level">
+            <option value="0">Show everything</option>
+            <option value="2">Hide light returns</option>
+            <option value="3">Moderate and above</option>
+            <option value="4">Heavy only</option>
+          </select>
+        </label>
       </div>
       <button type="button" class="map-recenter-btn" id="map-recenter-btn" title="Recenter map" aria-label="Recenter map">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1279,6 +1294,24 @@
           }
         });
       }
+      // SENSITIVITY. Read before the map is built (this block runs
+      // first) so the very first tiles are already filtered — switching
+      // afterwards would flash the unfiltered noise the setting exists to
+      // get rid of.
+      var levelSel = document.getElementById('radar-level');
+      var levelPref = parseInt(localStorage.getItem('pt_radar_level') || '0', 10);
+      if (!(levelPref >= 0)) levelPref = 0;
+      if (levelSel) {
+        levelSel.value = String(levelPref);
+        levelSel.addEventListener('change', function() {
+          var v = parseInt(levelSel.value, 10) || 0;
+          localStorage.setItem('pt_radar_level', String(v));
+          if (window._ptRadarLayer && window._ptRadarLayer.setMinLevel) {
+            window._ptRadarLayer.setMinLevel(v);
+          }
+        });
+      }
+      window._ptRadarLevel = levelPref;
       window._ptRadarPrefOff = (radarPref === '0');
     })();
 
@@ -1688,10 +1721,13 @@
       let knownCurrentLegId = {{ current_leg_id | tojson if current_leg_id else 'null' }};
       let userPinnedSelection = {{ 'true' if selected_id and not is_selected_live else 'false' }};
 
-      // Zoom control sits top-left, clear of the settings/recenter buttons
-      // (top-right) and the live stats overlay (bottom-right).
+      // NO ZOOM BUTTONS (1.26.2). Pinch and double-tap already zoom on a
+      // phone, and the scroll wheel does on a desktop, so the control was
+      // two permanent tap targets duplicating gestures people already
+      // have. Removing it also gives the top-left corner back to the map.
+      // zoomControl:false is what suppresses it — Leaflet adds the control
+      // by default, so this is not merely "not adding" it.
       const map = L.map('flight-map', { zoomControl: false });
-      L.control.zoom({ position: 'topleft' }).addTo(map);
       mapEl._leafletInstance = map;
 
       // The map is sized by a FIXED, full-viewport parent, and this script
@@ -1735,14 +1771,24 @@
       // Stays a plain Leaflet raster layer on the ordinary tilePane. The
       // basemap moving to WebGL changed nothing here: radar is painted by
       // Leaflet, above the basemap's pane, exactly as before.
-      const radarLayer = L.tileLayer.wms('https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0q.cgi', {
-        layers: 'nexrad-n0q',
-        format: 'image/png',
-        transparent: true,
+      // Built in static/radar.js, which also carries the reasoning for
+      // why the clear-air filtering happens on the pixels here instead of
+      // being asked for from the server. The URL, WMS parameters and
+      // attribution moved into that file with it.
+      const radarLayer = PT_RADAR.create({
         opacity: window._ptRadarPrefOff ? 0 : 0.55,
-        attribution: 'Radar &copy; IEM NEXRAD'
+        minLevel: window._ptRadarLevel || 0
       }).addTo(map);
       window._ptRadarLayer = radarLayer;
+
+      // The filter needs to read the radar image's pixels back out, which
+      // a browser only permits if the tile server allows cross-origin
+      // reads. If it does not, the radar still draws — unfiltered — and
+      // the control removes itself rather than sitting there inert.
+      map.on('radarfilterblocked', function() {
+        const row = document.getElementById('radar-level-row');
+        if (row) row.hidden = true;
+      });
 
       let originMarker = null, destMarker = null, remainingLine = null, flownLine = null, planeMarker = null;
       let lastFitPts = [];
