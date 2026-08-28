@@ -380,16 +380,57 @@ def trip_slices(all_legs: list) -> list:
     such leg is its own trip, so a roster with NO markers at all comes
     back as one trip containing everything — which degrades to exactly the
     old behaviour rather than to an empty tracker.
+
+    A BLANK LINE IS A HINT, NOT A VERDICT (1.26.1).
+    -----------------------------------------------
+    The blank-line rule assumed pilots separate TRIPS with blank lines.
+    Plenty separate DAYS with them, which is just as natural a way to
+    paste a roster and which the app never pushed back on. The result was
+    silent and bad: a three-day trip became three trips, the tracker
+    window is one trip, and so every leg already flown vanished from the
+    page the moment the calendar rolled over. From outside it read as
+    "past flights aren't showing" with no clue that a blank line caused
+    it.
+
+    So a marker only splits a trip when the CLOCK agrees with it. The gap
+    between the last arrival and the next departure has to be at least
+    GAP_TRIP_THRESHOLD_HOURS — the same 35 hours already used to suggest
+    boundaries on the import review page, so the two cannot disagree
+    about what a trip is. An overnight layover is nowhere near 35 hours;
+    a genuine gap between trips comfortably clears it.
+
+    A marker whose legs have no usable times still splits. Unknown is not
+    evidence against the pilot's own paste, and honouring it there keeps
+    this a narrowing of the rule rather than a replacement for it.
+
+    Scope: this function feeds tracker_window and nothing else. Day
+    grouping, overnight labels and the calendar all read `trip_start`
+    directly and are deliberately untouched — a blank line still means
+    what it always meant everywhere it is displayed.
     """
     trips, current = [], []
     for leg in all_legs:
-        if leg.trip_start and current:
+        if leg.trip_start and current and _is_real_trip_break(current[-1], leg):
             trips.append(current)
             current = []
         current.append(leg)
     if current:
         trips.append(current)
     return trips
+
+
+def _is_real_trip_break(prev_leg, next_leg) -> bool:
+    """Is the gap between these two legs long enough to be a new trip?
+
+    True when the times are missing, so an unreadable schedule keeps the
+    pilot's own marker instead of being quietly merged into one long trip.
+    """
+    prev_arr = prev_leg.arr_datetime_utc()
+    next_dep = next_leg.dep_datetime_utc()
+    if not prev_arr or not next_dep:
+        return True
+    gap_hours = (next_dep - prev_arr).total_seconds() / 3600
+    return gap_hours >= GAP_TRIP_THRESHOLD_HOURS
 
 
 def tracker_window(all_legs: list, anchor_id: Optional[str]) -> Optional[set]:

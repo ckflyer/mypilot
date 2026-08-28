@@ -12,6 +12,7 @@ the APP ICON can never disagree about what a plane looks like.
 """
 import json
 import os
+import re
 
 import cairosvg
 
@@ -80,6 +81,124 @@ for s in STYLES.values():
     # Same path on the map as on the home screen. Kept as a key so callers
     # that ask for `marker` keep working, but it is never a DIFFERENT shape.
     s["marker"] = s["icon"]
+
+
+# ---------------------------------------------------------------------------
+# WHERE THE MIDDLE OF A PLANE ACTUALLY IS.
+#
+# These silhouettes are drawn nose-up and NOT centred in their viewBox — the
+# nose reaches further toward the top edge than the tail does toward the
+# bottom, so the visual centre sits above 32. Delta is out by 4.5 units.
+#
+# That matters because the map marker rotates about the viewBox centre and is
+# pinned to the aircraft's position by that same point. If the shape's centre
+# and the viewBox centre are different points, the plane is drawn beside its
+# own coordinates, and the error grows with the heading.
+#
+# Measured here rather than typed in below, because a hand-entered number is
+# a number that goes stale the first time somebody nudges a path and doesn't
+# think to re-measure. Deliberately dependency-free: this script already
+# needs Pillow, and adding an SVG library to compute four pairs of floats
+# would be a poor trade.
+# ---------------------------------------------------------------------------
+
+_PATH_TOKEN = re.compile(r"[MmLlHhVvCcSsZz]|-?\d*\.?\d+(?:[eE][-+]?\d+)?")
+
+
+def _path_bbox(d):
+    """Bounding box of an SVG path as (xmin, xmax, ymin, ymax).
+
+    Handles the command set these silhouettes actually use — moves, lines,
+    cubics and close. Arcs and quadratics would raise rather than quietly
+    return a wrong box; better to fail loudly at build time than to ship a
+    marker that sits slightly off and takes a week to notice.
+
+    Cubics are sampled rather than solved. A closed-form extremum is exact
+    and about thirty lines; sampling at 1/64 of a curve is wrong by far less
+    than a thousandth of a pixel once scaled to a 40px marker, and you can
+    read it in one sitting.
+    """
+    toks = _PATH_TOKEN.findall(d)
+    i = 0
+    xs, ys = [], []
+    cx = cy = sx = sy = 0.0
+    cmd = None
+
+    def num():
+        nonlocal i
+        v = float(toks[i])
+        i += 1
+        return v
+
+    def cubic(x0, y0, x1, y1, x2, y2, x3, y3):
+        for k in range(65):
+            t = k / 64.0
+            u = 1 - t
+            xs.append(u*u*u*x0 + 3*u*u*t*x1 + 3*u*t*t*x2 + t*t*t*x3)
+            ys.append(u*u*u*y0 + 3*u*u*t*y1 + 3*u*t*t*y2 + t*t*t*y3)
+
+    prev_c2 = None
+    while i < len(toks):
+        if toks[i] in "MmLlHhVvCcSsZz":
+            cmd = toks[i]
+            i += 1
+        rel = cmd.islower()
+        c = cmd.upper()
+
+        if c == "Z":
+            cx, cy = sx, sy
+            prev_c2 = None
+            continue
+        if c == "M":
+            x, y = num(), num()
+            cx, cy = (cx + x, cy + y) if rel else (x, y)
+            sx, sy = cx, cy
+            xs.append(cx); ys.append(cy)
+            cmd = "l" if rel else "L"   # implicit lineto for extra pairs
+            prev_c2 = None
+            continue
+        if c == "L":
+            x, y = num(), num()
+            cx, cy = (cx + x, cy + y) if rel else (x, y)
+        elif c == "H":
+            x = num()
+            cx = cx + x if rel else x
+        elif c == "V":
+            y = num()
+            cy = cy + y if rel else y
+        elif c in ("C", "S"):
+            if c == "C":
+                x1, y1 = num(), num()
+                if rel:
+                    x1, y1 = cx + x1, cy + y1
+            else:
+                # Smooth cubic: first control point is the reflection of the
+                # previous one. With no previous curve it coincides with the
+                # current point, per spec.
+                x1, y1 = (2*cx - prev_c2[0], 2*cy - prev_c2[1]) if prev_c2 else (cx, cy)
+            x2, y2 = num(), num()
+            x3, y3 = num(), num()
+            if rel:
+                x2, y2 = cx + x2, cy + y2
+                x3, y3 = cx + x3, cy + y3
+            cubic(cx, cy, x1, y1, x2, y2, x3, y3)
+            prev_c2 = (x2, y2)
+            cx, cy = x3, y3
+            xs.append(cx); ys.append(cy)
+            continue
+        else:
+            raise ValueError(f"unsupported path command {cmd!r} — extend _path_bbox")
+
+        prev_c2 = None
+        xs.append(cx); ys.append(cy)
+
+    return min(xs), max(xs), min(ys), max(ys)
+
+
+for name, s in STYLES.items():
+    xmin, xmax, ymin, ymax = _path_bbox(re.search(r'd="([^"]+)"', s["marker"]).group(1))
+    s["cx"] = round((xmin + xmax) / 2, 3)
+    s["cy"] = round((ymin + ymax) / 2, 3)
 
 
 def icon_svg(style, px, maskable=False):
@@ -207,7 +326,8 @@ written.append(ico_path)
 
 # One source of truth for the marker, consumed by viewer.html. Regenerated
 # here so a path edit above cannot leave the map drawing the old shape.
-markers = {k: {"label": v["label"], "vb": v["vb"], "body": v["marker"]}
+markers = {k: {"label": v["label"], "vb": v["vb"],
+               "cx": v["cx"], "cy": v["cy"], "body": v["marker"]}
            for k, v in STYLES.items()}
 js = (
     "/* GENERATED by make_icons.py - do not edit by hand.\n"

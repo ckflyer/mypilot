@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.25.2 -->
+<!-- BUILT_FOR 1.26.1 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -14,6 +14,10 @@
        page loaded, the map library loads. -->
   <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css?v={{ version }}" />
   <script src="/static/vendor/leaflet/leaflet.js?v={{ version }}"></script>
+  <link rel="stylesheet" href="/static/vendor/maplibre/maplibre-gl.css?v={{ version }}" />
+  <script src="/static/vendor/maplibre/maplibre-gl.js?v={{ version }}"></script>
+  <script src="/static/vendor/maplibre/leaflet-maplibre-gl.js?v={{ version }}"></script>
+  <script src="/static/basemap.js?v={{ version }}"></script>
   <link rel="stylesheet" href="/static/app.css?v={{ version }}">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1719,15 +1723,18 @@
         window.addEventListener('resize', remeasure);
       }
 
-      const mapTheme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light_all' : 'dark_all';
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/' + mapTheme + '/{z}/{x}/{y}{r}.png', {
-        maxZoom: 18,
-        attribution: '&copy; OpenStreetMap &copy; CARTO'
-      }).addTo(map);
+      // THE BASEMAP LIVES IN static/basemap.js — see that file for why it
+      // is no longer CARTO. It creates its own pane beneath the radar, so
+      // the layer order below is guaranteed rather than incidental.
+      PT_BASEMAP.add(map);
 
       // Weather radar overlay — Iowa Environmental Mesonet's free public
       // NEXRAD composite, no key required. US-only (CONUS), which covers
       // every route in this schedule. Respects the map-settings toggle.
+      //
+      // Stays a plain Leaflet raster layer on the ordinary tilePane. The
+      // basemap moving to WebGL changed nothing here: radar is painted by
+      // Leaflet, above the basemap's pane, exactly as before.
       const radarLayer = L.tileLayer.wms('https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0q.cgi', {
         layers: 'nexrad-n0q',
         format: 'image/png',
@@ -1778,7 +1785,7 @@
           // planes.js failed to load. A missing marker is much worse than an
           // ugly one, so fall back to a plain dot rather than nothing.
           return L.divIcon({ className: 'plane-icon', iconSize: [14, 14], iconAnchor: [7, 7],
-                             html: '<svg width="14" height="14"><circle cx="7" cy="7" r="5" fill="#fff" stroke="#0f172a" stroke-width="1.5"/></svg>' });
+                             html: '<svg width="14" height="14" style="display:block"><circle cx="7" cy="7" r="5" fill="#fff" stroke="#0f172a" stroke-width="1.5"/></svg>' });
         }
         const vb = st.vb;
         // ONE path, so ONE outline — see make_icons.py. When this was three
@@ -1790,10 +1797,45 @@
         const body = st.body.replace(/<path/g,
           '<path fill="#ffffff" stroke="#0f172a" stroke-width="3" '
           + 'stroke-linejoin="round" paint-order="stroke"');
+        // WHY THE MARKER SAT BESIDE ITS OWN POSITION (1.25.3).
+        //
+        // Three separate offsets stacked up here, all of them invisible at
+        // a heading of due north, which is why this survived so long: the
+        // one case that looks right is the one you test with.
+        //
+        // 1. transform-origin was written in VIEWBOX units (32px of a
+        //    0 0 64 64 box) on an element whose CSS box is 40x40. The
+        //    outermost <svg> is a replaced element, so the browser
+        //    resolves that against the 40px box and puts the pivot 12px
+        //    down and right of centre. The marker then swings around a
+        //    corner instead of spinning in place — up to 34px away at a
+        //    southerly heading, which is most of the icon's own width.
+        //    `50% 50%` is the centre whatever the units, so it cannot
+        //    drift apart from the viewBox again.
+        //
+        // 2. An inline <svg> is inline-level, so it sits on a text
+        //    baseline and the line box leaves a few pixels of descender
+        //    space underneath it — the marker rides high inside its own
+        //    div by 3-4px. display:block takes it out of that flow.
+        //
+        // 3. The silhouettes are not vertically centred in their viewBox:
+        //    they are drawn nose-up with the tail short of the bottom
+        //    edge, so the visual centre sits above 32. Delta is out by
+        //    4.5 units, ~3px on screen. cy comes from planes.js, measured
+        //    from the path itself by make_icons.py, so a redrawn plane
+        //    re-measures instead of needing this number kept in step.
+        //
+        // Together they explain the symptom exactly: worst on the ground
+        // at the destination, where the aircraft's last heading is
+        // arbitrary and the airport dot underneath gives you something
+        // precise to compare against.
+        const cy = (typeof st.cy === 'number') ? st.cy : vb / 2;
+        const cx = (typeof st.cx === 'number') ? st.cx : vb / 2;
+        const shift = `translate(${(vb / 2 - cx).toFixed(2)} ${(vb / 2 - cy).toFixed(2)})`;
         const svg = `
           <svg width="40" height="40" viewBox="0 0 ${vb} ${vb}" xmlns="http://www.w3.org/2000/svg"
-               style="transform: rotate(${track}deg); transform-origin: ${vb / 2}px ${vb / 2}px; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.55));">
-            ${body}
+               style="display: block; transform: rotate(${track}deg); transform-origin: 50% 50%; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.55));">
+            <g transform="${shift}">${body}</g>
           </svg>`;
         return L.divIcon({ className: 'plane-icon', html: svg, iconSize: [40, 40], iconAnchor: [20, 20] });
       }

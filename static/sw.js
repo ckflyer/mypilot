@@ -35,6 +35,15 @@ const SHELL = [
   '/static/offline.html',
   '/static/vendor/leaflet/leaflet.css',
   '/static/vendor/leaflet/leaflet.js',
+  // The basemap renderer. maplibre-gl.js is ~1MB uncompressed and by far
+  // the largest thing here, but it is also the one asset without which
+  // the map is a grey box, so it is precached like any other shell file.
+  // cache.add is individually tolerated below, so if it ever fails the
+  // rest of the app still installs.
+  '/static/vendor/maplibre/maplibre-gl.css',
+  '/static/vendor/maplibre/maplibre-gl.js',
+  '/static/vendor/maplibre/leaflet-maplibre-gl.js',
+  '/static/basemap.js',
   '/static/vendor/Sortable.min.js',
   '/static/icon-192.png',
   '/static/favicon-32x32.png'

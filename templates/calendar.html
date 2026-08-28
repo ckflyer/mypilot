@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.25.2 -->
+<!-- BUILT_FOR 1.26.1 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -14,6 +14,10 @@
      never use would slow every month view to buy nothing. #}
   <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css?v={{ version }}" />
   <script defer src="/static/vendor/leaflet/leaflet.js?v={{ version }}"></script>
+  <link rel="stylesheet" href="/static/vendor/maplibre/maplibre-gl.css?v={{ version }}" />
+  <script defer src="/static/vendor/maplibre/maplibre-gl.js?v={{ version }}"></script>
+  <script defer src="/static/vendor/maplibre/leaflet-maplibre-gl.js?v={{ version }}"></script>
+  <script defer src="/static/basemap.js?v={{ version }}"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; }
@@ -160,6 +164,19 @@
       border: 1px solid var(--map-border);
       background: var(--input-bg);
     }
+    /* ATTRIBUTION IN A 150px BOX (1.26.0). Credit for OpenStreetMap data
+       is an ODbL condition, so it has to be here — but Leaflet's default
+       control is sized for a full-page map and eats a visible slice of a
+       thumbnail this small. Shrunk and made semi-transparent: still
+       legible and still a real link, without dominating the picture. */
+    .cal-map .leaflet-control-attribution {
+      font-size: 9px; line-height: 1.3; padding: 0 4px;
+      background: rgba(0, 0, 0, 0.45); color: #e2e8f0;
+    }
+    [data-theme="light"] .cal-map .leaflet-control-attribution {
+      background: rgba(255, 255, 255, 0.7); color: #334155;
+    }
+    .cal-map .leaflet-control-attribution a { color: inherit; }
     /* The provenance row inside an opened leg. .detail-row is declared in
        viewer.html's own <style>, so on THIS page it had no layout and the
        key ran straight into the value: "Arrival time fromthe airline".
@@ -350,28 +367,11 @@
         });
       }
 
-      // Falls back to the OS preference when data-theme is absent.
-      //
-      // On THIS page that fallback cannot fire: settings.theme is always
-      // "dark" or "light" (settings.py defaults it, and the picker offers
-      // nothing else), so the attribute is always set. It is here because
-      // the pre-auth pages DO render without data-theme and rely on the
-      // `:root:not([data-theme])` block in app.css, and if a map ever
-      // appears on one of those this reads the same source the CSS does
-      // rather than silently serving dark tiles onto a light page.
-      //
-      // An earlier version of this comment claimed the tracker's
-      // equivalent line was buggy for reading data-theme alone. It is
-      // not, for the reason above, and the claim was made without
-      // checking. Left recorded so the "fix" is not attempted later.
-      function tileTheme() {
-        var t = document.documentElement.getAttribute('data-theme');
-        if (t === 'light') return 'light_all';
-        if (t === 'dark') return 'dark_all';
-        return (window.matchMedia &&
-                window.matchMedia('(prefers-color-scheme: light)').matches)
-                ? 'light_all' : 'dark_all';
-      }
+      // tileTheme() lived here until 1.26.0, when the basemap moved to
+      // static/basemap.js. Its reasoning — why the OS-preference fallback
+      // is kept even though settings always sets data-theme, and why the
+      // tracker's simpler line was never actually a bug — moved with it,
+      // into that file's theme(). Nothing on this page picks tiles now.
 
       // THE ACCENT, READ FROM THE PAGE (1.25.0). Same reasoning and same
       // implementation as viewer.html's copy: Leaflet takes a colour
@@ -481,13 +481,33 @@
         // meant for the page, which is the exact bug 1.10.2 and 1.12.0
         // were spent on. There is a full map on the tracker for anyone
         // who wants to move one.
+        // ATTRIBUTION IS BACK ON (1.26.0). It was switched off here to
+        // keep the thumbnail clean, which was a licence gap rather than a
+        // style choice: OpenStreetMap data is ODbL and credit is a
+        // condition of use, not a courtesy. Leaflet's control is small,
+        // sits bottom-right, and the Leaflet self-promo prefix is dropped
+        // below so the line is only the credit that is actually required.
         var map = L.map(el, {
           dragging: false, touchZoom: false, scrollWheelZoom: false,
           doubleClickZoom: false, boxZoom: false, keyboard: false,
-          zoomControl: false, attributionControl: false
+          zoomControl: false
         });
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/' + tileTheme() + '/{z}/{x}/{y}{r}.png',
-                    { maxZoom: 18 }).addTo(map);
+        map.attributionControl.setPrefix('');
+
+        // ONE MAP AT A TIME, WHICH IS WHY THIS IS SAFE (1.26.0).
+        //
+        // The basemap is now WebGL, and a browser only grants a page a
+        // handful of WebGL contexts — roughly sixteen — before it starts
+        // silently killing the oldest. A calendar that left every opened
+        // leg's map alive would hit that wall and start showing blank
+        // panels, with nothing in the console to say why.
+        //
+        // It doesn't, because closeOpen() calls map.remove() before
+        // opening the next leg, and the MapLibre binding releases its
+        // context in onRemove. Exactly one context exists at any moment.
+        // If this page ever grows to show several maps at once, that
+        // assumption is what breaks first — start here.
+        PT_BASEMAP.add(map);
 
         // WHAT IT FLEW, OR WHAT IT WAS SUPPOSED TO (1.20.0).
         //

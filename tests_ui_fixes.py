@@ -1719,6 +1719,77 @@ def test_tracker_is_scoped_to_one_trip():
     check("no anchor at all shows everything", tracker_window(roster, None) is None)
 
 
+def test_a_blank_line_between_days_does_not_hide_the_flown_legs():
+    """A trip pasted a day at a time is still ONE trip. (1.26.1)
+
+    The parser marks trip_start on any leg following a blank line, on the
+    assumption that pilots separate TRIPS with blank lines. Plenty
+    separate DAYS with them, which is just as natural and which nothing
+    warned against. A three-day trip then became three trips; the tracker
+    window is one trip; so every leg already flown left the page the
+    moment the date rolled over. It presented as "past flights aren't
+    showing" with nothing pointing at a blank line.
+
+    A marker now only splits when the clock agrees — at least
+    GAP_TRIP_THRESHOLD_HOURS between arrival and next departure. An
+    overnight is nowhere near 35 hours; a real gap between trips clears
+    it easily.
+    """
+    from app.main import trip_slices, tracker_window
+    from app.models import FlightLeg
+    from app.airports import enrich_leg
+    from datetime import date as _d
+
+    # ENRICHED, unlike the helper in the test above. This rule compares
+    # arrival to next departure in UTC, and a leg only has a UTC time once
+    # its airports have been given timezones — which is what the parser
+    # and load_schedule both do before anything reaches trip_slices. An
+    # un-enriched leg here would test the missing-times fallback by
+    # accident and quietly pass while proving nothing.
+    def L(n, day, dep, arr, start=False, o="DFW", d="OKC"):
+        leg = FlightLeg(id=n, date=_d(2026, 8, day), flight_number=n,
+                        origin=o, destination=d,
+                        dep_time_local=dep, arr_time_local=arr,
+                        trip_start=start)
+        enrich_leg(leg)
+        return leg
+
+    # Three flying days, each marked because each was pasted after a blank
+    # line. The overnights are ordinary ones — roughly 14 hours.
+    roster = [L("d1a", 10, "08:00", "12:00", True), L("d1b", 10, "14:00", "18:00"),
+              L("d2a", 11, "08:00", "12:00", True), L("d2b", 11, "14:00", "18:00"),
+              L("d3a", 12, "08:00", "12:00", True), L("d3b", 12, "14:00", "18:00")]
+
+    trips = trip_slices(roster)
+    check("a day-separated paste is one trip, not three",
+          len(trips) == 1, str([[l.id for l in t] for t in trips]))
+
+    # The regression itself: airborne on day three, days one and two must
+    # still be on the page to scroll up to.
+    w = tracker_window(roster, "d3a")
+    check("...so the flown legs are still on the tracker",
+          w == {"d1a", "d1b", "d2a", "d2b", "d3a", "d3b"}, str(sorted(w)))
+
+    # The rule must still SPLIT where it should, or it has just deleted
+    # the feature. Two trips a fortnight apart stay two trips.
+    far = [L("t1", 1, "08:00", "12:00", True),
+           L("t2", 20, "08:00", "12:00", True)]
+    check("a real gap between trips still separates them",
+          len(trip_slices(far)) == 2, str(len(trip_slices(far))))
+    check("...and the tracker shows only the anchored one",
+          tracker_window(far, "t2") == {"t2"})
+
+    # A marker whose legs have no usable UTC time is honoured rather than
+    # merged: unknown is not evidence against the pilot's own paste. An
+    # airport this app has no timezone for is the real way that happens.
+    off_grid = L("u2", 15, "08:00", "12:00", True, o="ZZZ", d="QQQ")
+    check("...and the premise holds: that leg has no usable UTC time",
+          off_grid.dep_datetime_utc() is None)
+    unknown = [L("u1", 14, "08:00", "12:00", True), off_grid]
+    check("a marker the clock cannot check still splits",
+          len(trip_slices(unknown)) == 2, str(len(trip_slices(unknown))))
+
+
 def test_a_finished_trip_holds_the_tracker_for_ten_hours():
     """Landing does not wipe the trip off the page. (1.16.0)
 
@@ -3071,6 +3142,7 @@ def main():
     test_review_page_carries_removals_and_breaks()
     test_flights_page_filters_by_month()
     test_calendar_shows_one_month()
+    test_a_blank_line_between_days_does_not_hide_the_flown_legs()
 
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     return 1 if FAIL else 0
