@@ -931,3 +931,13 @@ body { padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important; }
   background: var(--input-bg); color: inherit;
   border: 1px solid var(--border);
 }
+
+
+/* NOTHING MAPLIBRE INJECTS MAY EVER TAKE A TAP (1.27.1).
+   The basemap pane is set pointer-events:none in basemap.js, but that is
+   an INHERITED value and maplibre-gl.css sets pointer-events:auto on its
+   own control elements, which escapes it. Leaflet owns every gesture on
+   this map — the GL layer is a picture and nothing more — so anything
+   inside it is taken out of hit-testing at the source rather than
+   relying on a stacking order that has to stay lucky. */
+.leaflet-gl-layer, .leaflet-gl-layer * { pointer-events: none !important; }

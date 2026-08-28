@@ -81,11 +81,28 @@
     return 1;
   }
 
+  // WMS PARAMETERS ARE NOT LAYER OPTIONS, AND LEAFLET DECIDES WHICH IS
+  // WHICH BY LOOKING AT THIS BLOCK (fixed in 1.27.1).
+  //
+  // L.TileLayer.WMS.initialize does, in effect:
+  //
+  //     for (key in passedOptions)
+  //         if (!(key in this.options)) wmsParams[key] = passedOptions[key];
+  //
+  // Anything already named in `options` is treated as a Leaflet setting and
+  // deliberately kept OUT of the query string. 1.27.0 declared layers,
+  // format and transparent here, which read like sensible defaults and
+  // instead deleted them from every request: the map asked IEM for
+  // layers="" as an opaque JPEG and got nothing back. The radar simply
+  // stopped appearing, with no error anywhere.
+  //
+  // So ONLY genuine Leaflet options belong in this block. The WMS
+  // parameters are passed at construction in create() below, where they
+  // are absent from this.options and therefore reach the server.
+  // opacity, attribution and crossOrigin ARE real TileLayer options and
+  // are correct here — they must not leak into the URL.
   var RadarLayer = L.TileLayer.WMS.extend({
     options: {
-      layers: 'nexrad-n0q',
-      format: 'image/png',
-      transparent: true,
       attribution: 'Radar &copy; IEM NEXRAD',
       crossOrigin: 'anonymous',
       minLevel: 0            // 0 = show everything, unfiltered
@@ -167,6 +184,13 @@
     create: function (opts) {
       opts = opts || {};
       return new RadarLayer(WMS_URL, {
+        // These three are WMS QUERY PARAMETERS, not layer options, and
+        // must be passed here rather than defaulted in the options block
+        // above — see the comment on RadarLayer for what happens if they
+        // move.
+        layers: 'nexrad-n0q',
+        format: 'image/png',
+        transparent: true,
         opacity: typeof opts.opacity === 'number' ? opts.opacity : 0.55,
         minLevel: opts.minLevel || 0
       });

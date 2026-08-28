@@ -1790,6 +1790,39 @@ def test_a_blank_line_between_days_does_not_hide_the_flown_legs():
           len(trip_slices(unknown)) == 2, str(len(trip_slices(unknown))))
 
 
+def test_the_radar_still_asks_for_a_layer():
+    """The radar's WMS parameters must not be declared as layer options.
+
+    1.27.0 moved layers/format/transparent into the RadarLayer options
+    block, where they read like tidy defaults. Leaflet's WMS constructor
+    decides what goes in the query string by checking what is NOT already
+    in this.options, so naming them there deleted them from every
+    request: the map asked IEM for layers="" as an opaque JPEG and the
+    radar silently vanished. No error, no warning, just no weather.
+
+    Asserted on the source because the failure is a missing query
+    parameter rather than a thrown exception — the kind of thing that
+    only shows up as a blank map on someone's phone.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "static", "radar.js"), encoding="utf-8") as fh:
+        src = fh.read()
+
+    opts = src[src.find("var RadarLayer"):]
+    opts = opts[:opts.find("},")]
+    for param in ("layers", "format", "transparent"):
+        check(f"{param} is NOT declared as a layer option",
+              f"{param}:" not in opts, opts[:200])
+
+    create = src[src.find("create: function"):]
+    create = create[:create.find("},")]
+    check("layers is passed at construction", "layers: 'nexrad-n0q'" in create)
+    check("...as a transparent PNG", "format: 'image/png'" in create
+          and "transparent: true" in create)
+    check("...and opacity stays a layer option, not a query parameter",
+          "opacity:" in create)
+
+
 def test_a_finished_trip_holds_the_tracker_for_ten_hours():
     """Landing does not wipe the trip off the page. (1.16.0)
 
@@ -3143,6 +3176,7 @@ def main():
     test_flights_page_filters_by_month()
     test_calendar_shows_one_month()
     test_a_blank_line_between_days_does_not_hide_the_flown_legs()
+    test_the_radar_still_asks_for_a_layer()
 
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     return 1 if FAIL else 0
