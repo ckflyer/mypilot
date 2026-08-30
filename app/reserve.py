@@ -175,3 +175,21 @@ def apply_changes(user_id: int, add, remove) -> dict:
     finally:
         conn.close()
     return {"added": len(add), "removed": len(remove)}
+
+
+def all_dates(user_id: int):
+    """Every reserve date for a pilot, as ISO strings.
+
+    Used to work out which months the calendar can navigate to. Returns
+    strings rather than dates because the caller only wants the year and
+    month, and parsing every row to throw the day away is wasted work.
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT date FROM reserve_days WHERE user_id = ? ORDER BY date",
+            (user_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r["date"] for r in rows]

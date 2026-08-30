@@ -1476,6 +1476,22 @@ async def calendar_reserve(request: Request):
     return JSONResponse({"date": day.isoformat(), "on": on})
 
 
+def _rsv_edge(d, step, reserve_visible, by_date, at_row_edge) -> bool:
+    """Is this the end of a run of reserve days, in direction `step`?
+
+    True means "round this side off". A run is broken by the edge of the
+    week as well as by a different kind of day, because a block that
+    carried on across a line break would be drawn as two bars with square
+    ends that look like a rendering fault rather than a continuation.
+    """
+    if at_row_edge:
+        return True
+    neighbour = d + timedelta(days=step)
+    if by_date.get(neighbour):
+        return True          # a flying day: never merge across this seam
+    return neighbour.isoformat() not in reserve_visible
+
+
 @app.get("/calendar", response_class=HTMLResponse)
 async def calendar_page(request: Request, month: Optional[str] = None):
     pilot = current_pilot(request)
@@ -1540,7 +1556,19 @@ async def calendar_page(request: Request, month: Optional[str] = None):
     #
     # The month shown is a URL parameter, so it survives a refresh, can be
     # linked, and is what the browser Back button steps through.
-    months_with_data = sorted({(l.date.year, l.date.month) for l in legs})
+    # A MONTH OF RESERVE IS A MONTH WITH DATA (1.29.2).
+    #
+    # This used to derive the month list from flights alone, which was
+    # true right up until reserve days existed. A month holding nothing
+    # but reserve was treated as empty: it never appeared in the picker
+    # and could not be reached with the arrows, so the days were saved,
+    # visible in the database, and unreachable in the UI.
+    #
+    # Anything a pilot deliberately put on the calendar counts.
+    month_keys = {(l.date.year, l.date.month) for l in legs if l.date}
+    for iso in reserve_days.all_dates(user_id):
+        month_keys.add((int(iso[:4]), int(iso[5:7])))
+    months_with_data = sorted(month_keys)
     if not months_with_data:
         months_with_data = [(today.year, today.month)]
 
@@ -1593,6 +1621,13 @@ async def calendar_page(request: Request, month: Optional[str] = None):
                 # A day with flights is a flying day, so reserve is
                 # suppressed rather than deleted — see app/reserve.py.
                 "is_reserve": d.isoformat() in reserve_visible and not day_legs,
+                # Reserve merges with RESERVE only. A run ends where the
+                # next day is a flying day, an ordinary empty day, or the
+                # end of the week — so a reserve block never fuses into
+                # the trip bar beside it and the two stay readable as
+                # different things.
+                "rsv_left": _rsv_edge(d, -1, reserve_visible, by_date, is_first_col),
+                "rsv_right": _rsv_edge(d, 1, reserve_visible, by_date, is_last_col),
                 "day": d.day,
                 "in_month": d.month == month,
                 "is_today": d == today,
@@ -1614,9 +1649,20 @@ async def calendar_page(request: Request, month: Optional[str] = None):
             d = date(year, month, day_num)
             day_legs = by_date.get(d, [])
             trip = trip_for_day(d)
+            _rsv = d.isoformat() in reserve_visible and not day_legs
+            _rsv_prev = (d - timedelta(days=1)).isoformat() in reserve_visible \
+                and not by_date.get(d - timedelta(days=1))
+            _rsv_next = (d + timedelta(days=1)).isoformat() in reserve_visible \
+                and not by_date.get(d + timedelta(days=1))
             agenda.append({
                 "iso": d.isoformat(),
-                "is_reserve": d.isoformat() in reserve_visible and not day_legs,
+                "is_reserve": _rsv,
+                # Same run logic as the grid, so a block of reserve reads
+                # as one stretch in the list too rather than as N separate
+                # identical cards.
+                "rsv_is_start": _rsv and not _rsv_prev,
+                "rsv_is_end": _rsv and not _rsv_next,
+                "rsv_seamless_after": bool(_rsv and _rsv_next and day_num < last_day),
                 "label": d.strftime("%A, %B %d").replace(" 0", " "),
                 "is_today": d == today,
                 "legs": [leg_view(l, now, time_format, tags_by_leg,

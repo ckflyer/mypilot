@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.29.1 -->
+<!-- BUILT_FOR 1.29.2 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -387,22 +387,52 @@
       display: flex; align-items: center; justify-content: center; padding: 1rem;
     }
     .reserve-modal[hidden] { display: none; }
+    /* SIZED FROM THE GRID, NOT GUESSED AT (1.29.2).
+       max-width was a round number that had nothing to do with the seven
+       columns inside it, so the sheet was narrower than its own contents
+       and the days spilled to one side. The width is now derived: seven
+       columns of a fixed size, six gaps between them, plus the padding.
+       Change --rsv-cell and everything still lines up. */
     .reserve-sheet {
-      background: var(--card); border-radius: 16px; padding: 1rem;
-      width: 100%; max-width: 360px;
+      --rsv-cell: 40px;
+      --rsv-gap: 6px;
+      --rsv-pad: 1rem;
+      background: var(--card); border-radius: 16px; padding: var(--rsv-pad);
+      width: calc((var(--rsv-cell) * 7) + (var(--rsv-gap) * 6) + (var(--rsv-pad) * 2));
+      max-width: calc(100vw - 2rem);
       box-shadow: 0 18px 50px rgba(0,0,0,0.45);
     }
-    .reserve-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem; }
-    .reserve-title { font-weight: 700; }
+    /* Three columns with the arrows FIXED width and the title taking the
+       rest. With space-between, the title's centre moved every time the
+       month name changed length, and the arrows shifted with it. */
+    .reserve-head {
+      display: grid; grid-template-columns: 34px 1fr 34px;
+      align-items: center; gap: 0.5rem; margin-bottom: 0.7rem;
+    }
+    .reserve-title { font-weight: 700; text-align: center; font-size: 0.95rem; }
     .reserve-nav {
       background: none; border: 1px solid var(--border); color: inherit;
-      border-radius: 8px; width: 34px; height: 34px; font-size: 1.1rem; cursor: pointer;
+      border-radius: 8px; width: 34px; height: 34px;
+      font-size: 1.1rem; line-height: 1; cursor: pointer;
+      /* Flex rather than line-height: the chevrons are punctuation and
+         sit off-centre on their own baseline otherwise. */
+      display: flex; align-items: center; justify-content: center; padding: 0;
     }
-    .reserve-dow, .reserve-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+    .reserve-nav:hover { border-color: var(--accent); }
+    .reserve-dow, .reserve-grid {
+      display: grid;
+      grid-template-columns: repeat(7, var(--rsv-cell));
+      gap: var(--rsv-gap);
+      justify-content: center;
+    }
     .reserve-dow { color: var(--muted); font-size: 0.7rem; text-align: center; margin-bottom: 4px; }
+    .reserve-dow span { display: flex; align-items: center; justify-content: center; }
     .reserve-day {
-      aspect-ratio: 1; border: 1px solid var(--border); border-radius: 8px;
-      background: none; color: inherit; font: inherit; font-size: 0.85rem; cursor: pointer;
+      width: var(--rsv-cell); height: var(--rsv-cell);
+      display: flex; align-items: center; justify-content: center;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: none; color: inherit; font: inherit; font-size: 0.85rem;
+      cursor: pointer; padding: 0;
     }
     .reserve-day.blank { border: none; cursor: default; }
     /* A day that already has flights. Shown, not hidden, so the reason it
@@ -739,9 +769,23 @@
 
     var cursor = new Date();
     cursor = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
-    var initial = {};   // iso -> true, per month, as loaded
-    var chosen = {};    // iso -> true, per month, as edited
+    // ACCUMULATED ACROSS MONTHS, NOT RESET BY NAVIGATION (1.29.2).
+    //
+    // These were rebuilt from the server response on every month change,
+    // which threw away anything picked in the month you just left. Select
+    // three days in August, page to September, come back, and August was
+    // blank — the taps were never saved anywhere, so they were simply
+    // gone.
+    //
+    // Now they accumulate. `initial` is what the server said, `chosen` is
+    // what the pilot has made it, and both keep every month visited this
+    // session. `loaded` records which months have been fetched so that
+    // returning to one does NOT re-seed it from the server and quietly
+    // undo the edits made there.
+    var initial = {};   // iso -> true, as the server had it
+    var chosen = {};    // iso -> true, as edited
     var flying = {};
+    var loaded = {};    // 'YYYY-MM' -> true, months already fetched
 
     function key(d) {
       return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') +
@@ -785,8 +829,15 @@
       fetch('/calendar/reserve/month?month=' + monthKey(cursor))
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function(data) {
-          initial = {}; chosen = {}; flying = {};
-          data.reserve.forEach(function(iso) { initial[iso] = true; chosen[iso] = true; });
+          var mk = monthKey(cursor);
+          var first = !loaded[mk];
+          loaded[mk] = true;
+          data.reserve.forEach(function(iso) {
+            initial[iso] = true;
+            // Only seed the selection the FIRST time a month is fetched.
+            // On a revisit the pilot's edits are the newer truth.
+            if (first) chosen[iso] = true;
+          });
           data.flights.forEach(function(iso) { flying[iso] = true; });
           note.textContent = "Tap days to select. Days with flights can't be reserve.";
           render();

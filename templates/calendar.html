@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.29.1 -->
+<!-- BUILT_FOR 1.29.2 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -205,19 +205,43 @@
        the accent colour at low opacity so a month of reserve does not
        shout louder than the actual flying. */
     .agenda-reserve { color: var(--accent); font-size: 0.85rem; font-weight: 600; }
+    /* Reserve cards join into one stretch the same way trip cards do,
+       but outlined rather than filled — see the grid rule above. */
+    .agenda-day.is-reserve {
+      border-left: 4px solid var(--accent);
+      padding-left: calc(1.1rem - 4px);
+    }
+    .agenda-day.is-reserve:not(.rsv-start) { border-top-left-radius: 0; border-top-right-radius: 0; }
+    .agenda-day.is-reserve:not(.rsv-end) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+    .agenda-day.rsv-seamless-after { margin-bottom: 0; padding-bottom: 1rem; }
+    /* RESERVE ON THE GRID (1.29.2).
+       Same bar shape as a trip, drawn as an outline instead of a fill: a
+       day held rather than a day flown, but unmistakably a block.
+
+       Borders are set per SIDE, not with a shorthand, so consecutive
+       reserve days share an edge and read as one bar. Only the ends of a
+       run get a left/right border and rounding, which is what stops a
+       week of reserve looking like seven separate boxes.
+
+       The run is broken by flying days as well as by empty ones, so a
+       reserve block never fuses into the trip bar next to it. */
     .day-cell.is-reserve {
-      border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+      border-top: 2px solid var(--accent);
+      border-bottom: 2px solid var(--accent);
+      color: var(--text);
+    }
+    .day-cell.is-reserve.rsv-left {
+      border-left: 2px solid var(--accent);
+      border-top-left-radius: 8px; border-bottom-left-radius: 8px;
+    }
+    .day-cell.is-reserve.rsv-right {
+      border-right: 2px solid var(--accent);
+      border-top-right-radius: 8px; border-bottom-right-radius: 8px;
     }
     .reserve-mark { color: var(--accent); font-weight: 700; letter-spacing: 0.04em; }
-    .reserve-toggle {
-      margin-top: 0.5rem; font: inherit; font-size: 0.78rem;
-      background: none; color: var(--muted);
-      border: 1px dashed var(--border); border-radius: 8px;
-      padding: 0.25rem 0.6rem; cursor: pointer;
-    }
-    .reserve-toggle:hover { color: var(--text); border-color: var(--accent); }
-    .reserve-toggle.on { color: var(--accent); border-style: solid; }
-    .reserve-toggle[disabled] { opacity: 0.5; cursor: default; }
+
+    
+    
     /* Sits AFTER the route, not between the flight number and it. In front
        it pushed every deadhead's route right by the badge width, so the
        origin/destination column no longer lined up down the day. */
@@ -275,6 +299,8 @@
         {% if day.is_today %}{% set _ = classes.append('is-today') %}{% endif %}
         {% if day.in_trip %}{% set _ = classes.append('in-trip') %}{% endif %}
         {% if day.is_reserve %}{% set _ = classes.append('is-reserve') %}{% endif %}
+        {% if day.is_reserve and day.rsv_left %}{% set _ = classes.append('rsv-left') %}{% endif %}
+        {% if day.is_reserve and day.rsv_right %}{% set _ = classes.append('rsv-right') %}{% endif %}
         {% if day.round_left %}{% set _ = classes.append('round-left') %}{% endif %}
         {% if day.round_right %}{% set _ = classes.append('round-right') %}{% endif %}
         {% if day.in_month %}
@@ -298,7 +324,7 @@
   </div>
 
   {% for day in block.agenda %}
-  <div class="agenda-day {% if day.is_today %}is-today{% endif %} {% if day.in_trip %}in-trip{% endif %} {% if day.trip_is_start %}trip-start{% endif %} {% if day.trip_is_end %}trip-end{% endif %} {% if day.seamless_after %}seamless-after{% endif %}" id="day-{{ day.iso }}">
+  <div class="agenda-day {% if day.is_today %}is-today{% endif %} {% if day.in_trip %}in-trip{% endif %} {% if day.trip_is_start %}trip-start{% endif %} {% if day.trip_is_end %}trip-end{% endif %} {% if day.seamless_after %}seamless-after{% endif %} {% if day.is_reserve %}is-reserve{% endif %} {% if day.rsv_is_start %}rsv-start{% endif %} {% if day.rsv_is_end %}rsv-end{% endif %} {% if day.rsv_seamless_after %}rsv-seamless-after{% endif %}" id="day-{{ day.iso }}">
     <div class="agenda-label">{{ day.label }}</div>
     {% if day.legs %}
       {% for leg in day.legs %}
@@ -356,17 +382,7 @@
       <div class="agenda-empty">No flights scheduled</div>
       {% endif %}
     {% endif %}
-    {#- The toggle is pilots-only and only on days with no flights. A day
-        that already has a trip on it cannot be marked reserve, which
-        keeps the "a flight beats reserve" rule true in the UI as well as
-        in the data, rather than offering a button that would appear to
-        do nothing. -#}
-    {% if is_pilot and not day.legs %}
-    <button type="button" class="reserve-toggle{% if day.is_reserve %} on{% endif %}"
-            data-date="{{ day.iso }}" data-on="{{ '1' if day.is_reserve else '0' }}">
-      {{ 'Remove reserve' if day.is_reserve else '+ Mark reserve' }}
-    </button>
-    {% endif %}
+
   </div>
   {% endfor %}
   {% endfor %}
@@ -641,48 +657,6 @@
           });
       });
     })();
-
-      /* RESERVE TOGGLE (1.29.0).
-       *
-       * Updates the button from what the SERVER confirms, not from what
-       * was clicked. A reserve day is hand-entered and cannot be
-       * recovered by re-importing, so a button that looks saved when the
-       * request failed is worse here than almost anywhere else in the
-       * app — the pilot would have no way to know the day was lost until
-       * they needed it.
-       *
-       * The grid cell above updates on the next load rather than being
-       * patched live. Reserve is not something people toggle in bulk,
-       * and a page that agrees with the database beats one kept in sync
-       * by hand. */
-      document.querySelectorAll('.reserve-toggle').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var iso = btn.dataset.date;
-          var want = btn.dataset.on !== '1';
-          btn.disabled = true;
-          fetch('/calendar/reserve', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ date: iso, on: want })
-          }).then(function(r) {
-            if (!r.ok) throw new Error('http ' + r.status);
-            return r.json();
-          }).then(function(data) {
-            btn.dataset.on = data.on ? '1' : '0';
-            btn.classList.toggle('on', !!data.on);
-            btn.textContent = data.on ? 'Remove reserve' : '+ Mark reserve';
-            var card = document.getElementById('day-' + iso);
-            var line = card && card.querySelector('.agenda-empty, .agenda-reserve');
-            if (line) {
-              line.className = data.on ? 'agenda-reserve' : 'agenda-empty';
-              line.textContent = data.on ? 'On reserve' : 'No flights scheduled';
-            }
-          }).catch(function() {
-            // Left as it was, so the button still shows the truth.
-            btn.textContent = 'Could not save - tap to retry';
-          }).then(function() { btn.disabled = false; });
-        });
-      });
   </script>
 {% include "partials/sw_register.html" %}
 </body>

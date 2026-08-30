@@ -160,7 +160,22 @@ def test_a_date_in_both_lists_is_kept_not_dropped():
     check("add wins over remove", reserve.count_for_user(uid) == 1)
 
 
+def test_a_month_of_only_reserve_still_counts_as_a_month():
+    """The calendar used to build its month list from flights alone.
+
+    A month holding nothing but reserve was therefore treated as empty:
+    saved in the database, listed by all_dates, and unreachable in the
+    UI. This asserts the source the calendar reads actually contains it.
+    """
+    uid = new_pilot()
+    reserve.apply_changes(uid, [date(2026, 11, 3), date(2026, 11, 4)], [])
+    months = {(int(i[:4]), int(i[5:7])) for i in reserve.all_dates(uid)}
+    check("a reserve-only month is discoverable", (2026, 11) in months, str(months))
+    check("...and every reserve date is listed", len(reserve.all_dates(uid)) == 2)
+
+
 def main():
+    test_a_month_of_only_reserve_still_counts_as_a_month()
     test_a_batch_of_changes_is_all_or_nothing()
     test_adding_a_day_twice_in_one_batch_is_harmless()
     test_a_date_in_both_lists_is_kept_not_dropped()
