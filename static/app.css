@@ -947,3 +947,14 @@ body { padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important; }
    inside it is taken out of hit-testing at the source rather than
    relying on a stacking order that has to stay lucky. */
 .leaflet-gl-layer, .leaflet-gl-layer * { pointer-events: none !important; }
+
+
+/* Dark-ish raster fallback (1.28.1). Only ever applied when the vector
+   basemap could not start — see basemap.js. Inverting and rotating the
+   hue back is the standard trick for faking a dark OpenStreetMap: water
+   and land come out plausible, and it beats a white rectangle behind a
+   dark app. Scoped to the basemap pane so the radar and flight path,
+   which are in other panes, are untouched. */
+.leaflet-pane.basemap-raster-dark {
+  filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(0.9);
+}

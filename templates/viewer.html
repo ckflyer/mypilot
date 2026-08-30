@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.28.0 -->
+<!-- BUILT_FOR 1.29.1 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -1326,18 +1326,19 @@
       // means the stops can be retuned later without a saved preference
       // suddenly meaning something different.
       //
-      // Defaults to 0, showing the raw picture. Filtering is offered, not
-      // imposed: the unfiltered radar is what the data actually says, and
-      // 1.27.2 turning it on by default was making that choice for
-      // everyone.
+      // Defaults to stop 1, "Hide light returns". Clear-air return is not
+      // weather and covers whole states on a dry day, so the useful
+      // picture is the filtered one. Anyone who wants the raw data can
+      // slide back to zero and it sticks.
       //
       // Read here, before the map is built, so the first tiles already
       // carry the right threshold instead of loading twice.
       var levelSel = document.getElementById('radar-level');
       var levelLabel = document.getElementById('radar-level-label');
       var stops = (window.PT_RADAR && PT_RADAR.STOPS) || [{ min: 0, label: '' }];
-      var idx = parseInt(localStorage.getItem('pt_radar_stop') || '0', 10);
-      if (!(idx >= 0 && idx < stops.length)) idx = 0;
+      var storedStop = localStorage.getItem('pt_radar_stop');
+      var idx = parseInt(storedStop === null ? '1' : storedStop, 10);
+      if (!(idx >= 0 && idx < stops.length)) idx = 1;
       var levelPref = stops[idx].min;
 
       if (levelSel) {

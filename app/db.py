@@ -270,6 +270,12 @@ def _create_flights(conn) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_roster_user ON roster(user_id, sort_index)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_roster_flight ON roster(flight_id)")
 
+    # Hand-entered reserve days. Deliberately NOT part of `flights`, so
+    # replace_schedule cannot destroy them on the next import — see
+    # app/reserve.py for the reasoning.
+    from . import reserve as _reserve
+    _reserve.ensure_table(conn)
+
 
 def _sync_flight_columns(conn) -> None:
     """Add any column in FLIGHT_COLUMNS that the table doesn't have yet.

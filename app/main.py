@@ -53,6 +53,7 @@ FLASH_KIND = {"promoted": "good", "demoted": "good"}
 from .ratelimit import check_rate_limit
 from . import debuglog
 from . import radar_proxy
+from . import reserve as reserve_days
 from .version import VERSION, API_VERSION, MIN_CLIENT_VERSION, client_is_supported
 
 BASE = Path(__file__).resolve().parent.parent
@@ -1390,6 +1391,91 @@ async def viewer_settings_moved_post():
 # Calendar — pilot or viewer, same rules as the tracker page
 # ---------------------------------------------------------------------------
 
+@app.get("/calendar/reserve/month")
+async def reserve_month(request: Request, month: str):
+    """One month of picker state: which days are reserve, which are flying.
+
+    The picker needs both. Flying days are sent so it can grey them out
+    rather than letting someone mark a day that a flight would override
+    anyway — the rule is easier to understand as a disabled square than
+    as a selection that quietly does nothing.
+    """
+    pilot = current_pilot(request)
+    if not pilot:
+        return JSONResponse({"error": "not a pilot"}, status_code=403)
+    try:
+        year, mon = int(month[:4]), int(month[5:7])
+        first = date(year, mon, 1)
+    except (ValueError, IndexError):
+        return JSONResponse({"error": "bad month"}, status_code=400)
+    last = date(year, mon, cal_module.monthrange(year, mon)[1])
+
+    legs = load_schedule(pilot["id"])
+    flying = sorted({l.date.isoformat() for l in legs
+                     if l.date and first <= l.date <= last})
+    return JSONResponse({
+        "month": month,
+        "reserve": sorted(reserve_days.days_in_range(pilot["id"], first, last)),
+        "flights": flying,
+    })
+
+
+@app.post("/calendar/reserve/bulk")
+async def reserve_bulk(request: Request):
+    """Save a batch of picker changes.
+
+    Flying days are filtered out here as well as in the picker. The
+    browser check is for clarity; this one is the rule. A stale page or a
+    hand-made request should not be able to create a reserve day that the
+    calendar would then refuse to display.
+    """
+    pilot = current_pilot(request)
+    if not pilot:
+        return JSONResponse({"error": "not a pilot"}, status_code=403)
+
+    payload = await request.json()
+
+    def parse(key):
+        out = []
+        for raw in (payload.get(key) or [])[:400]:
+            try:
+                out.append(date.fromisoformat(str(raw)))
+            except ValueError:
+                continue
+        return out
+
+    add, remove = parse("add"), parse("remove")
+    flying = {l.date for l in load_schedule(pilot["id"]) if l.date}
+    add = [d for d in add if d not in flying]
+
+    result = reserve_days.apply_changes(pilot["id"], add, remove)
+    return JSONResponse(result)
+
+
+@app.post("/calendar/reserve")
+async def calendar_reserve(request: Request):
+    """Mark or unmark a reserve day.
+
+    Pilots only. A viewer is looking at somebody else's roster and has no
+    business editing it — and reserve is the one thing here that cannot
+    be recovered by re-importing, so it gets the stricter check rather
+    than the friendlier one.
+    """
+    pilot = current_pilot(request)
+    if not pilot:
+        return JSONResponse({"error": "not a pilot"}, status_code=403)
+
+    payload = await request.json()
+    try:
+        day = date.fromisoformat(str(payload.get("date", "")))
+    except ValueError:
+        return JSONResponse({"error": "bad date"}, status_code=400)
+
+    on = bool(payload.get("on"))
+    reserve_days.set_day(pilot["id"], day, on, str(payload.get("note", "")))
+    return JSONResponse({"date": day.isoformat(), "on": on})
+
+
 @app.get("/calendar", response_class=HTMLResponse)
 async def calendar_page(request: Request, month: Optional[str] = None):
     pilot = current_pilot(request)
@@ -1481,6 +1567,18 @@ async def calendar_page(request: Request, month: Optional[str] = None):
     cal = cal_module.Calendar(firstweekday=6)  # weeks start Sunday
     month_blocks = []
     for year, month in [(int(active[:4]), int(active[5:7]))]:
+        # Reserve days for everything this grid can show, resolved once.
+        # The range is deliberately wider than the month: the grid pads
+        # with leading and trailing days from the neighbouring months, and
+        # those cells are real days that can be on reserve too.
+        #
+        # Days carrying flights are dropped here rather than in the cell
+        # loop, so "a flight overwrites reserve" is decided in one place.
+        _grid_days = list(cal.itermonthdates(year, month))
+        reserve_visible = reserve_days.visible_days(
+            user_id, min(_grid_days), max(_grid_days),
+            [d for d, legs in by_date.items() if legs])
+
         weeks = []
         week = []
         for d in cal.itermonthdates(year, month):
@@ -1492,6 +1590,9 @@ async def calendar_page(request: Request, month: Optional[str] = None):
             week.append({
                 "date": d,
                 "iso": d.isoformat(),
+                # A day with flights is a flying day, so reserve is
+                # suppressed rather than deleted — see app/reserve.py.
+                "is_reserve": d.isoformat() in reserve_visible and not day_legs,
                 "day": d.day,
                 "in_month": d.month == month,
                 "is_today": d == today,
@@ -1507,6 +1608,7 @@ async def calendar_page(request: Request, month: Optional[str] = None):
                 week = []
 
         _, last_day = cal_module.monthrange(year, month)
+
         agenda = []
         for day_num in range(1, last_day + 1):
             d = date(year, month, day_num)
@@ -1514,6 +1616,7 @@ async def calendar_page(request: Request, month: Optional[str] = None):
             trip = trip_for_day(d)
             agenda.append({
                 "iso": d.isoformat(),
+                "is_reserve": d.isoformat() in reserve_visible and not day_legs,
                 "label": d.strftime("%A, %B %d").replace(" 0", " "),
                 "is_today": d == today,
                 "legs": [leg_view(l, now, time_format, tags_by_leg,

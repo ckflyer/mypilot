@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.28.0 -->
+<!-- BUILT_FOR 1.29.1 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -199,6 +199,25 @@
       color: var(--muted); font-size: 0.8125rem;
     }
     .agenda-empty { color: var(--muted); font-size: 0.85rem; }
+
+    /* RESERVE (1.29.0). Visually quieter than a trip, because it is not
+       one — a day held, not a day flown. Dashed rather than solid, and
+       the accent colour at low opacity so a month of reserve does not
+       shout louder than the actual flying. */
+    .agenda-reserve { color: var(--accent); font-size: 0.85rem; font-weight: 600; }
+    .day-cell.is-reserve {
+      border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+    }
+    .reserve-mark { color: var(--accent); font-weight: 700; letter-spacing: 0.04em; }
+    .reserve-toggle {
+      margin-top: 0.5rem; font: inherit; font-size: 0.78rem;
+      background: none; color: var(--muted);
+      border: 1px dashed var(--border); border-radius: 8px;
+      padding: 0.25rem 0.6rem; cursor: pointer;
+    }
+    .reserve-toggle:hover { color: var(--text); border-color: var(--accent); }
+    .reserve-toggle.on { color: var(--accent); border-style: solid; }
+    .reserve-toggle[disabled] { opacity: 0.5; cursor: default; }
     /* Sits AFTER the route, not between the flight number and it. In front
        it pushed every deadhead's route right by the badge width, so the
        origin/destination column no longer lined up down the day. */
@@ -255,6 +274,7 @@
         {% if not day.in_month %}{% set _ = classes.append('out-month') %}{% endif %}
         {% if day.is_today %}{% set _ = classes.append('is-today') %}{% endif %}
         {% if day.in_trip %}{% set _ = classes.append('in-trip') %}{% endif %}
+        {% if day.is_reserve %}{% set _ = classes.append('is-reserve') %}{% endif %}
         {% if day.round_left %}{% set _ = classes.append('round-left') %}{% endif %}
         {% if day.round_right %}{% set _ = classes.append('round-right') %}{% endif %}
         {% if day.in_month %}
@@ -262,6 +282,7 @@
           <span class="day-num">{{ day.day }}</span>
           {% if day.start_time %}<div class="time-label">{{ day.start_time }}</div>{% endif %}
           {% if day.finish_time %}<div class="time-label">{{ day.finish_time }}</div>{% endif %}
+          {% if day.is_reserve %}<div class="meta-line reserve-mark">RSV</div>{% endif %}
           {% if day.leg_count %}
           <div class="meta-line">{{ day.leg_count }} leg{{ 's' if day.leg_count != 1 else '' }}</div>
           {% endif %}
@@ -329,7 +350,22 @@
       </div>
       {% endfor %}
     {% else %}
+      {% if day.is_reserve %}
+      <div class="agenda-reserve">On reserve</div>
+      {% else %}
       <div class="agenda-empty">No flights scheduled</div>
+      {% endif %}
+    {% endif %}
+    {#- The toggle is pilots-only and only on days with no flights. A day
+        that already has a trip on it cannot be marked reserve, which
+        keeps the "a flight beats reserve" rule true in the UI as well as
+        in the data, rather than offering a button that would appear to
+        do nothing. -#}
+    {% if is_pilot and not day.legs %}
+    <button type="button" class="reserve-toggle{% if day.is_reserve %} on{% endif %}"
+            data-date="{{ day.iso }}" data-on="{{ '1' if day.is_reserve else '0' }}">
+      {{ 'Remove reserve' if day.is_reserve else '+ Mark reserve' }}
+    </button>
     {% endif %}
   </div>
   {% endfor %}
@@ -605,6 +641,48 @@
           });
       });
     })();
+
+      /* RESERVE TOGGLE (1.29.0).
+       *
+       * Updates the button from what the SERVER confirms, not from what
+       * was clicked. A reserve day is hand-entered and cannot be
+       * recovered by re-importing, so a button that looks saved when the
+       * request failed is worse here than almost anywhere else in the
+       * app — the pilot would have no way to know the day was lost until
+       * they needed it.
+       *
+       * The grid cell above updates on the next load rather than being
+       * patched live. Reserve is not something people toggle in bulk,
+       * and a page that agrees with the database beats one kept in sync
+       * by hand. */
+      document.querySelectorAll('.reserve-toggle').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var iso = btn.dataset.date;
+          var want = btn.dataset.on !== '1';
+          btn.disabled = true;
+          fetch('/calendar/reserve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date: iso, on: want })
+          }).then(function(r) {
+            if (!r.ok) throw new Error('http ' + r.status);
+            return r.json();
+          }).then(function(data) {
+            btn.dataset.on = data.on ? '1' : '0';
+            btn.classList.toggle('on', !!data.on);
+            btn.textContent = data.on ? 'Remove reserve' : '+ Mark reserve';
+            var card = document.getElementById('day-' + iso);
+            var line = card && card.querySelector('.agenda-empty, .agenda-reserve');
+            if (line) {
+              line.className = data.on ? 'agenda-reserve' : 'agenda-empty';
+              line.textContent = data.on ? 'On reserve' : 'No flights scheduled';
+            }
+          }).catch(function() {
+            // Left as it was, so the button still shows the truth.
+            btn.textContent = 'Could not save - tap to retry';
+          }).then(function() { btn.disabled = false; });
+        });
+      });
   </script>
 {% include "partials/sw_register.html" %}
 </body>

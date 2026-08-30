@@ -140,12 +140,38 @@
    * neither renderer could be used — callers should treat null as "the
    * map still works, it just has no background" rather than as fatal.
    */
+  /* WHEN THE VECTOR MAP DOES NOT LOAD (1.28.1).
+   *
+   * This used to fail silently. If MapLibre could not start, the raster
+   * fallback appeared, nobody was told, and the only clue was that the
+   * map looked like plain OpenStreetMap — cream background, pink roads —
+   * instead of Positron or Fiord. It was reported as "dark mode shows a
+   * light map", which is the symptom, not the cause: the fallback has no
+   * dark variant, so a theme that looked broken was really a renderer
+   * that never started.
+   *
+   * Two changes. The reason is recorded on PT_BASEMAP.renderer so it can
+   * be read from the console in one line instead of guessed at, and the
+   * fallback now honours the theme so a failure is at least not ugly.
+   */
   function add(map, opts) {
     opts = opts || {};
     var attribution = opts.attribution === false ? undefined : ATTRIBUTION;
     var pane = ensurePane(map);
 
-    if (hasWebGL() && typeof L.maplibreGL === 'function') {
+    var why = null;
+    if (!hasWebGL()) {
+      why = 'this browser reports no WebGL support';
+    } else if (typeof L.maplibreGL !== 'function') {
+      why = 'leaflet-maplibre-gl.js did not load (check /static/vendor/maplibre/)';
+    } else if (typeof window.maplibregl === 'undefined') {
+      // Worth its own branch: the binding can load fine while the ~1MB
+      // engine beside it does not, and then the failure only shows up
+      // later, inside addTo, looking like something else entirely.
+      why = 'maplibre-gl.js did not load (check /static/vendor/maplibre/)';
+    }
+
+    if (!why) {
       try {
         var layer = L.maplibreGL({
           style: TILE_STYLES[theme()],
@@ -153,15 +179,30 @@
           attribution: attribution
         });
         layer.addTo(map);
+        window.PT_BASEMAP.renderer = 'vector (' + theme() + ')';
         return layer;
       } catch (e) {
         // Falling through rather than rethrowing. A map with plain tiles
         // is a worse map; a page that threw here is no map at all.
-        console.warn('[basemap] MapLibre failed, using raster fallback', e);
+        why = 'MapLibre threw on startup: ' + (e && e.message ? e.message : e);
       }
     }
 
-    console.warn('[basemap] WebGL unavailable — using raster fallback');
+    window.PT_BASEMAP.renderer = 'raster fallback — ' + why;
+    console.warn('[basemap] Using the RASTER FALLBACK, not Positron/Fiord.\n' +
+                 '  Reason: ' + why + '\n' +
+                 '  This map ignores light/dark. Read PT_BASEMAP.renderer for this string.');
+
+    // The fallback is the standard OpenStreetMap style and there is no
+    // dark version of it that is free and needs no key. Inverting and
+    // rotating the hue back is the long-standing trick for this: it is
+    // not real dark cartography, but it stops a dark app from flashing a
+    // white rectangle. Applied to the pane so it cannot touch the radar
+    // or the flight path, which live in other panes.
+    if (theme() === 'dark') {
+      map.getPane(pane).classList.add('basemap-raster-dark');
+    }
+
     return L.tileLayer(FALLBACK_URL, {
       maxZoom: 19,
       pane: pane,
@@ -171,6 +212,9 @@
 
   window.PT_BASEMAP = {
     add: add,
+    // Set by add(). 'vector (dark)' when all is well; otherwise the
+    // reason the fallback was used. Check this first.
+    renderer: 'not initialised',
     styles: TILE_STYLES,
     attribution: ATTRIBUTION,
     paneName: PANE_NAME,
