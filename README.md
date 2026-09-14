@@ -52,7 +52,7 @@ seriously.
 Multi-user: the owner plus several FOs, who fly the same legs — hence
 shared flight rows (v5.1, retained).
 
-Tests: **2,267**, twelve suites, all passing.
+Tests: **2,285**, twelve suites, all passing.
 
 **THE v1.26–v1.29.2 HISTORY IS RECONSTRUCTED, NOT RECORDED.** Five
 releases shipped without VERSION HISTORY entries, exactly as v6.4–v7.4
@@ -826,6 +826,45 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     `merge_schedule`, and `merge_schedule` only writes what it is given.
     Before reaching for a per-row flag, check whether absence already says
     it. (1.30.0)
+
+44. **A lookup that guesses a default is not a single source of truth.**
+    `PLAN_DEFAULT_ON` was the one place the import page's row defaults
+    were declared — invariant 42 done properly — and it still produced a
+    wrong answer, because it was read with `.get(state, False)`. Two
+    states were missing from the dict, so they got a silent, plausible,
+    wrong value instead of an error, and a whole month imported as one
+    trip. If a table is the authority on something, a missing key is a
+    BUG and must behave like one: list every case, or raise. A default
+    that guesses turns the one place you look into the one place that
+    lies. (1.30.1)
+
+45. **Ask the DOM the same question the browser will ask.** A page that
+    computes "which rows are being submitted" from a class or a data
+    attribute is keeping a second, parallel model of the request, and the
+    two drift. Test the thing itself — is the input present, is it
+    enabled — because a disabled input is not submitted and no attribute
+    can overrule that. This is the same reasoning as invariant 23 (the
+    diagnostics must not be the broken thing) applied to a form: the
+    description must not be able to disagree with the fact. (1.30.1)
+
+46. **Test pastes must include the past.** Every test written for the
+    1.30.0 import rebuild used a future-only schedule, which is what a
+    demo looks like and not what a roster looks like. The owner pastes a
+    month at a time, mid-month, so half of it has already been flown —
+    and that is the case that broke. Any fixture for the import page must
+    straddle today. (1.30.1)
+
+47. **Before hiding, freezing or defaulting a GROUP of rows, enumerate the
+    states in it and say what is true of each.** 1.30.1 folded away
+    everything "already flown" on the grounds that none of it was
+    decidable. That described `flown` exactly and `gone_flown` not at all —
+    and `gone_flown` is the reassignment case, the one row on the import
+    page whose decision cannot be reconstructed later. The category was
+    right for the common case and wrong for the case it mattered in.
+    Note the shape: the release immediately before it fixed a bug caused
+    by one ATTRIBUTE meaning two things. This one was a PHRASE meaning two
+    things. A group is only safe to treat as a unit once every member has
+    been named out loud. (1.30.2)
 
 ## MODULE MAP
 
@@ -1660,14 +1699,14 @@ python tests_poller_end_to_end.py   #    47
 python tests_past_leg_detail.py     #    19
 python tests_budget_limit.py        #    17
 python tests_carrier_cap.py         #    13
-python tests_ui_fixes.py            #   836
+python tests_ui_fixes.py            #   854
 python tests_app_shell.py           #   211
 python tests_timezones.py           #    68
 python tests_closeout_sweep.py      #    42
 python tests_import_merge.py        #    43
 python tests_test_mode.py           #   136
 python tests_regression_matrix.py   #   768
-```                                  #  2267
+```                                  #  2285
 
 | Suite | Covers |
 |---|---|
@@ -1754,6 +1793,145 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.30.2 — the fold hid the one row that mattered
+
+**Caught by the owner reading 1.30.1's release notes, before deploying**,
+by asking what the new fold would do to a case the notes had not
+considered: reassigned off a leg, somebody else flew it, no time to
+re-import, paste the updated schedule from the hotel that night.
+
+1.30.1 folded away every ALREADY-FLOWN row on the reasoning that "nothing
+in this run is decidable". That is true of one of the two past states and
+false of the other:
+
+    flown       in the paste AND on the roster, already departed.
+                Frozen by the 1.22.0 rule — an import never changes a
+                flight that has happened. Nothing to decide, and on a
+                whole-month paste there are dozens of them. This is what
+                the fold was built for.
+
+    gone_flown  on the roster, already departed, and THE PASTE HAS
+                STOPPED MENTIONING IT.
+
+The second is the reassignment. The leg is still on his roster, so unless
+he removes it the app goes on believing he flew it — it stays in his
+history, on his calendar, and since the poller tracked the real aircraft
+at the time (it was on his roster, so it was in the window) there is a
+recorded track attached to a flight he was not on.
+
+It is the most consequential decision on the page and the only one he
+cannot reconstruct later. 1.30.1 put it behind a disclosure triangle.
+
+**Folding is now restricted to runs of consecutive `flown` rows.** A
+`gone_flown` breaks the run and stays in plain sight, in date order, with
+its own control and the bulk Remove-all/Keep-all above. Its default is
+still KEEP, unchanged from 1.20.0/1.21.0: the app must never delete
+history on its own, because the same silence also describes the ordinary
+case of pasting a single trip. What it must do is SHOW him.
+
+Mechanically the fold went from one leading run to any number of runs,
+which makes tag balance a live risk. Both markers are therefore set in a
+single server-side pass (`fold_start` / `fold_end` / `fold_count`) and the
+template only reads them — invariant 31, and the reason 1.30.1's
+now-deleted "close the fold at the end if the paste is entirely past"
+special case does not need an equivalent here.
+
+**THE PATTERN WORTH NOTICING.** 1.30.1 fixed a bug caused by one word
+meaning two things (`data-on`), and introduced one caused by one phrase
+meaning two things ("already flown"). Both times a category that was
+correct for the common case was applied to a state it did not fit. Before
+hiding, freezing or defaulting a group of rows, enumerate the states in it
+and say what is true of EACH — invariant 47.
+
+2282 → 2285 assertions. 1.30.1's own fold test was rewritten one release
+after it was written, because it correctly described a feature that was
+wrong.
+
+### 1.30.1 — a whole month imported as one trip
+
+**Found by the owner on the first real import after 1.30.0**, which is the
+fourth time in this app's history that a release was proved wrong by
+somebody flying with it rather than by a test. Breaks were placed
+correctly on the review page and arrived on the calendar as one continuous
+trip.
+
+**THE MECHANISM.** The server pairs `leg_trip_start[i]` with
+`leg_date[i]` BY POSITION. The review page's submit handler builds that
+array by walking the list and counting rows it believes are being
+submitted. It asked:
+
+    if (child.getAttribute('data-on') !== '1') { return; }
+
+and `data-on` does not mean what that line assumed. It means "is this row
+at a decision the pilot can change". An ALREADY-FLOWN leg in the paste has
+no decision — the 1.22.0 rule freezes it — so `PLAN_DEFAULT_ON.get(state,
+False)` returned False and the row reported `data-on="0"`. The template
+rendered its hidden inputs anyway, correctly, because the leg IS in the
+paste and the merge DOES receive it.
+
+So on a whole-month paste with two trips already flown, the browser sent
+**eight legs and four trip-start values**. The server ran out of values at
+index four and fell through to its default of "not a trip start" for every
+leg after it — welding all the later trips onto the first one.
+
+It needed three things at once and so survived 2,267 assertions: a paste
+covering dates in the PAST (a fresh roster has none), at least one
+already-flown leg BEFORE an upcoming one, and more than one trip after it.
+Every test written for 1.30.0 pasted future-only schedules. The owner
+pastes a month at a time, mid-month, which hits all three on the first
+try.
+
+**TWO GUARDS, because either alone is a coincidence of agreement:**
+
+1. `default_on` now means exactly one thing — will this row's decision be
+   applied — so SAME and FLOWN are True, matching what the form sends.
+2. The counter asks the DOM **the same question the browser will ask**: is
+   this row's `leg_date` input present and enabled? A disabled input is
+   not submitted, so this cannot disagree with the request whatever any
+   attribute claims.
+
+The second is the real fix. The first can be undone by adding a seventh
+state and forgetting the dict; the second cannot be wrong. `data-on` is
+now used only for drawing a row and is explicitly not evidence about the
+request.
+
+**This is invariant 42 failing on its first outing.** That invariant says
+to declare a fact once as data — and `PLAN_DEFAULT_ON` did exist. The flaw
+was upstream of it: the dict was `.get(state, False)`, so a state simply
+MISSING from it got a silent, wrong answer instead of an error. A default
+that guesses is not a single source of truth. New invariant 44.
+
+---
+
+**ALREADY-FLOWN FLIGHTS NOW FOLD AWAY.** Also reported: "you have to
+scroll through all the past flights… it will add up fast."
+
+Departure order puts every past leg at the top, so a whole-month paste
+made you scroll two weeks of flights that had already happened to reach
+the one decision you came for. Nothing in that run is decidable — a flown
+leg in the paste is frozen, and a flown leg the paste omits defaults to
+keep and already has a bulk control.
+
+The leading run of past rows is now inside one `<details>`, shut, labelled
+with its count. **Shut, not removed**, and the distinction is the point:
+the rows stay in the DOM and still submit, because dropping them from the
+form would be a fresh instance of the bug this same release fixes. The
+submit handler walks `querySelectorAll` rather than `.children` precisely
+so nesting them changes nothing.
+
+The boundary is an index computed once server-side (`past_upto`), not a
+per-row condition in the template — a `<details>` opened on one condition
+and closed on another is how tags get left unbalanced (invariant 31).
+Only a LEADING run folds: a past row appearing after an upcoming one would
+mean the sort is wrong, and hiding it would hide the evidence. Fewer than
+three rows do not fold, because a tap that saves two rows is not a saving.
+
+2267 → 2282 assertions. Two of 1.30.0's own tests were updated: both
+pinned strings this fix removed, and both now assert the stronger rule.
+One of them had to learn to strip Jinja comments first — these templates
+carry long notes about what a page USED to be, and a test searching raw
+source finds the history and fails on it.
 
 ### 1.30.0 — the app was fine; the things around it were not
 

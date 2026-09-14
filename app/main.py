@@ -943,6 +943,14 @@ def build_plan_rows(plan: list, time_format: str = "24") -> list:
             "same_zone": tz_abbr(leg, "dep") == tz_abbr(leg, "arr"),
             "is_deadhead": leg.is_deadhead,
             "gap_label": gap_label,
+            # ALREADY HAPPENED, so there is nothing to decide and it does
+            # not need to be on screen. The two past states are `flown`
+            # (in the paste, already departed — frozen by the 1.22.0 rule)
+            # and `gone_flown` (on the roster, the paste is silent, and
+            # the default is to keep it). Both are date-sorted to the top
+            # of the list, which is the worst possible place for rows
+            # nobody needs to read. See the fold in import_review.html.
+            "is_past": state in ("flown", "gone_flown"),
             # Only ever a SUGGESTION, and only on a row that is actually
             # being imported — a break is a roster fact written by the
             # merge, so it has nowhere to land on a row the merge never
@@ -959,6 +967,58 @@ def build_plan_rows(plan: list, time_format: str = "24") -> list:
         arr = leg.arr_datetime_utc()
         if arr is not None:
             prev_arr = arr
+    # WHICH ROWS FOLD AWAY (1.30.1, corrected 1.30.2)
+    #
+    # ONLY `flown`. NEVER `gone_flown`. The first version of this folded
+    # every past row on the grounds that "nothing in this run is
+    # decidable", and that was wrong about half of it — in exactly the
+    # case the state exists for.
+    #
+    #   flown       in the paste AND on the roster, already departed.
+    #               Frozen by the 1.22.0 rule: an import never changes a
+    #               flight that has happened. There is genuinely nothing
+    #               to decide, and on a whole-month paste there are dozens.
+    #
+    #   gone_flown  on the roster, already departed, and THE PASTE DOES
+    #               NOT MENTION IT. That is the reassignment case: he was
+    #               pulled off a leg, somebody else flew it, and the
+    #               updated schedule no longer lists it. It is still on
+    #               his roster, so unless he removes it the app will go on
+    #               believing he flew it — and the poller has very likely
+    #               already tracked the real aircraft and closed it, so it
+    #               has a track attached.
+    #
+    # That row is the single most consequential decision on the page, it
+    # is the one the pilot cannot reconstruct later, and 1.30.1 hid it
+    # behind a disclosure triangle. Folding it was the opposite of what
+    # the fold was for.
+    #
+    # So the fold takes RUNS OF CONSECUTIVE `flown` ROWS, and a
+    # `gone_flown` sitting among them breaks the run and stays in plain
+    # sight, in date order, where it belongs.
+    #
+    # The open and close markers are computed HERE, as flags on the rows,
+    # rather than as two conditions in the template. A <details> opened on
+    # one test and closed on another is how tags end up unbalanced —
+    # invariant 31 — and this version has to open and close more than once.
+    FOLD_MIN = 3          # folding one or two rows costs a tap, saves nothing
+    i = 0
+    for r in out:
+        r["fold_start"] = False
+        r["fold_end"] = False
+        r["fold_count"] = 0
+    while i < len(out):
+        if out[i]["state"] != FLOWN:
+            i += 1
+            continue
+        j = i
+        while j < len(out) and out[j]["state"] == FLOWN:
+            j += 1
+        if j - i >= FOLD_MIN:
+            out[i]["fold_start"] = True
+            out[i]["fold_count"] = j - i
+            out[j - 1]["fold_end"] = True
+        i = j
     return out
 
 

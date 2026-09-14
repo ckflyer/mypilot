@@ -233,7 +233,19 @@ GONE_FLOWN = "gone_flown"
 # Which states the pilot can actually act on, and which way they lead.
 # Declared as data rather than as branches in the template, so the page
 # and the confirm step cannot come to disagree about what a row means.
-PLAN_DEFAULT_ON = {NEW: True, RETIMED: True, GONE: True, GONE_FLOWN: False}
+# `default_on` means ONE thing: WILL THIS ROW'S DECISION BE APPLIED.
+# For a paste row that means "will its inputs be submitted"; for a roster
+# row it means "will the removal be ticked".
+#
+# SAME and FLOWN are True, and that is a BUG FIX (1.30.1), not a tidy-up.
+# They were absent, so `.get(state, False)` made them False — while the
+# template still rendered their hidden inputs, because they ARE in the
+# paste and the merge does receive them. So the page said "off" about
+# rows the browser was submitting, and the review page's trip-break
+# counter believed it. See the 1.30.1 entry: a whole-month paste lost
+# every trip break after the first already-flown leg.
+PLAN_DEFAULT_ON = {NEW: True, RETIMED: True, SAME: True, FLOWN: True,
+                   GONE: True, GONE_FLOWN: False}
 
 # The states the pilot can act on at all. `same` and `flown` are on the
 # list to be SEEN, not to be decided — a pilot counting his trip needs

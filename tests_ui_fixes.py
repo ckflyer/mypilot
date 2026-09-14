@@ -3079,11 +3079,28 @@ def test_review_page_carries_removals_and_breaks():
     check("every flight is drawn by ONE row component", ir.count('class="prow') >= 1)
     check("...and each actionable row carries its own control",
           "data-tog" in ir)
+    # UPDATED 1.30.1. This asserted NO <details> anywhere in the list,
+    # which was the right rule stated too broadly: 1.30.1 folds the
+    # already-flown run behind one. The rule is that the page must not
+    # return to its pre-1.30.0 shape, where the DECISIONS were in a
+    # collapsed section separate from the diff. So what must not be
+    # hidden is a row with something to decide.
+    # JINJA COMMENTS ARE STRIPPED FIRST, and that is not a convenience.
+    # These templates carry long notes about what the page USED TO BE —
+    # this one names the old collapsed section it replaced — so a test
+    # searching raw source finds the history and fails on it. Strip the
+    # comments and ask about the markup that actually renders.
+    _src = re.sub(r"\{#.*?#\}", "", ir, flags=re.S)
+    _list = _src.split('<div id="plan-list">', 1)[1].split('<p class="helpnote"', 1)[0]
     check("trip breaks are in the SAME list as the flights, not a "
           "separate collapsed section",
-          '<div id="plan-list">' in ir and 'class="brk"' in ir and
-          "details" not in ir.split('<div id="plan-list">', 1)[1]
-          .split("</div>\n\n    <p class=\"helpnote\"", 1)[0])
+          '<div id="plan-list">' in _src and 'class="brk"' in _list and
+          "Trip breaks & full list" not in _src)
+    check("...and the only collapsed thing is the already-flown run, "
+          "which by construction holds nothing decidable",
+          _list.count("<details") == 1 and 'class="pastfold"' in _list and
+          '"is_past": state in ("flown", "gone_flown")' in
+          open(os.path.join(here, "app", "main.py"), encoding="utf-8").read())
     check("...with the rest gap printed beside them, which is what the "
           "decision actually turns on",
           "gap_label" in ir and "since the last arrival" in ir)
@@ -3093,8 +3110,13 @@ def test_review_page_carries_removals_and_breaks():
           "i.disabled = !on" in ir)
     check("...leaving the row visible so the choice is reversible",
           ".prow.off" in ir and "classList.toggle('off'" in ir)
+    # UPDATED 1.30.1. The rule is unchanged and now enforced by a
+    # stronger test: a skipped row's inputs are DISABLED, and the counter
+    # asks exactly that, so it cannot disagree with what is submitted.
+    # It used to ask `data-on`, which is what caused the 1.30.1 bug —
+    # see test_trip_breaks_are_counted_by_what_is_actually_submitted.
     check("a skipped leg does not consume a trip_start slot",
-          "getAttribute('data-on') !== '1') { return; }" in ir)
+          "d.disabled" in ir.split("addEventListener('submit'", 1)[1])
 
     check("roster removals ride on the same rows", 'name="remove_id"' in ir)
     check("...guarded server-side by the offered list",
@@ -3111,6 +3133,136 @@ def test_review_page_carries_removals_and_breaks():
           "before any row is read",
           ir.find("already flown can never")
           < ir.find('<div id="plan-list">'))
+
+
+def test_trip_breaks_are_counted_by_what_is_actually_submitted():
+    """The 1.30.1 bug: eight legs sent, four trip-start values sent. (1.30.1)
+
+    The server pairs `leg_trip_start[i]` with `leg_date[i]` BY POSITION.
+    So the page's count of "rows being submitted" has to match the form's,
+    exactly, or every break after the first mismatch lands on the wrong
+    leg — and any leg past the end of the short array silently defaults to
+    "not a trip start", which welds every later trip onto the first one.
+    That is what put a whole month on the calendar as one continuous trip.
+
+    The cause was a word meaning two things. `data-on` was read as "is
+    this row submitted". It is not; it is "is this row at a decision the
+    pilot can change". An ALREADY-FLOWN leg in the paste has no decision —
+    the 1.22.0 rule freezes it — so it reported `data-on="0"`, while the
+    template rendered its hidden inputs anyway, because it IS in the paste
+    and the merge DOES receive it.
+
+    Two guards, because either alone would be a coincidence of agreement
+    rather than a fix:
+
+      1. `default_on` now means one thing — will this row's decision be
+         applied — so SAME and FLOWN are True, matching the form.
+      2. The counter asks the DOM THE SAME QUESTION THE BROWSER WILL ASK:
+         is this row's `leg_date` input present and enabled? A disabled
+         input is not submitted, so that test cannot disagree with the
+         request no matter what any attribute claims.
+
+    Guard 2 is the real one. Guard 1 can be undone by adding a seventh
+    state and forgetting the dict; guard 2 cannot be wrong.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "import_review.html"),
+              encoding="utf-8") as fh:
+        ir = fh.read()
+    with open(os.path.join(here, "app", "importer.py"), encoding="utf-8") as fh:
+        imp = fh.read()
+
+    handler = ir.split("addEventListener('submit'", 1)[1].split("});", 1)[0]
+
+    # THE FIX. The counter must test the input, not an attribute.
+    check("the trip-break counter tests the submitted input itself",
+          "input[name=\"leg_date\"]" in handler and "d.disabled" in handler,
+          handler[:400])
+    # THE BUG, guarded directly. data-on must not be what decides this.
+    check("...and never `data-on`, which is about drawing the row",
+          "data-on" not in handler, handler[:400])
+    # Nesting must not change the count — the already-flown fold puts rows
+    # inside a <details>, so `.children` would stop seeing them.
+    check("...walking the whole list, so nested rows still count",
+          "querySelectorAll" in handler and ".children" not in handler)
+
+    defaults = imp.split("PLAN_DEFAULT_ON = ", 1)[1].split("}", 1)[0]
+    check("a leg in the paste that is already flown counts as ON, "
+          "because its inputs are submitted",
+          "FLOWN: True" in defaults, defaults)
+    check("...and so does an unchanged one", "SAME: True" in defaults, defaults)
+    # The two opposite removal defaults from 1.20.0/1.21.0 must survive
+    # this edit — they are the safety mechanism, not housekeeping.
+    check("...while the removal defaults stay opposite",
+          "GONE: True" in defaults and "GONE_FLOWN: False" in defaults, defaults)
+
+
+def test_already_flown_flights_fold_away_on_the_import_page():
+    """Only the frozen ones fold. A reassignment must never hide. (1.30.2)
+
+    REWRITTEN one release after it was written, because the feature it
+    described was wrong. 1.30.1 folded every PAST row on the reasoning
+    that "nothing in this run is decidable". That is true of `flown` and
+    false of `gone_flown`, and the difference is the whole point:
+
+      flown       in the paste AND on the roster, already departed.
+                  Frozen by the 1.22.0 rule. Nothing to decide, and on a
+                  whole-month paste there are dozens.
+      gone_flown  on the roster, already departed, and THE PASTE HAS
+                  STOPPED MENTIONING IT.
+
+    That second one is the reassignment case the owner asked about: he
+    gets pulled off a leg, somebody else flies it, he pastes the updated
+    schedule that night. The leg is still on his roster, so unless he
+    removes it the app goes on believing he flew it — and the poller has
+    very likely already tracked the real aircraft and closed it, so there
+    is a track attached to a flight he was not on.
+
+    It is the most consequential decision on the page, it is the one he
+    cannot reconstruct later, and 1.30.1 put it behind a disclosure
+    triangle. So: `flown` folds, `gone_flown` never does, however far in
+    the past it is.
+
+    Mechanically that means the fold is no longer one leading run but any
+    number of runs, which makes tag balance a real risk — hence the
+    markers being computed in one server-side pass rather than as two
+    template conditions (invariant 31).
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "import_review.html"),
+              encoding="utf-8") as fh:
+        ir = fh.read()
+    with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
+        src = fh.read()
+
+    check("already-flown runs are folded", 'class="pastfold"' in ir)
+    check("...as a native <details>, so it opens with no JavaScript",
+          '<details class="pastfold">' in ir)
+    check("...saying how many it hides", "already flown" in ir)
+
+    # THE FIX. Only FLOWN is foldable.
+    fold_pass = src.split("FOLD_MIN = 3", 1)[1].split("return out", 1)[0]
+    check("only `flown` rows are eligible to fold",
+          'out[i]["state"] != FLOWN' in fold_pass, fold_pass[:300])
+    check("...so a `gone_flown` row breaks the run and stays visible",
+          'out[j]["state"] == FLOWN' in fold_pass)
+    check("...and GONE_FLOWN is named nowhere in the fold decision",
+          "GONE_FLOWN" not in fold_pass and "gone_flown" not in fold_pass,
+          fold_pass[:300])
+
+    # Balance. Open and close come from one pass over one list.
+    check("open and close markers are computed server-side, together",
+          'r["fold_start"]' in src and 'r["fold_end"]' in src)
+    check("...and the template only reads them",
+          "{% if r.fold_start %}" in ir and "{% if r.fold_end %}" in ir)
+    check("...with no second, separate closing condition left behind",
+          "in_past_fold" not in ir and "fold_n" not in ir)
+    check("a run of one or two does not fold, where a tap saves nothing",
+          "FOLD_MIN = 3" in src)
+
+    # SHUT, NOT REMOVED — dropping rows from the form is the 1.30.1 bug.
+    check("folded rows still submit, so the trip-break count is unaffected",
+          "querySelectorAll" in ir.split("addEventListener('submit'", 1)[1])
 
 
 def test_flights_page_filters_by_month():
@@ -3240,6 +3392,8 @@ def main():
     test_past_detail_available(create_user("detailtest", "pw-not-used"))
     test_time_lines()
     test_review_page_carries_removals_and_breaks()
+    test_trip_breaks_are_counted_by_what_is_actually_submitted()
+    test_already_flown_flights_fold_away_on_the_import_page()
     test_flights_page_filters_by_month()
     test_calendar_shows_one_month()
     test_a_blank_line_between_days_does_not_hide_the_flown_legs()

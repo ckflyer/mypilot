@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.30.0 -->
+<!-- BUILT_FOR 1.30.2 -->
 {#- THE IMPORT REVIEW, rebuilt 1.30.0.
 
     ONE LIST. That is the whole change, and it is worth recording why the
@@ -157,6 +157,23 @@
     .prow.off .ttl, .prow.off .meta { text-decoration: line-through; }
     .prow.off .tog { color: var(--accent); border-color: var(--accent); }
 
+    /* The already-flown fold. Same shape as the admin page's .dfold, so
+       the app has one kind of collapsible row rather than three. */
+    .pastfold { border: 1px dashed var(--border); border-radius: 10px; margin-bottom: 0.5rem; }
+    .pastfold > summary {
+      display: flex; align-items: center; gap: 0.6rem; cursor: pointer;
+      padding: 0.6rem 0.75rem; font-size: 0.82rem; color: var(--muted);
+      list-style: none; -webkit-tap-highlight-color: transparent;
+    }
+    .pastfold > summary::-webkit-details-marker { display: none; }
+    .pastfold > summary::marker { content: ""; }
+    .pastfold > summary::after { content: "›"; margin-left: auto; font-size: 1.1rem; line-height: 1; }
+    .pastfold[open] > summary::after { content: "⌄"; }
+    .pf-v { margin-left: auto; font-size: 0.76rem; opacity: 0.8; }
+    .pastfold[open] .pf-v { display: none; }
+    .pastfold-b { padding: 0 0.6rem 0.5rem; }
+    .pastfold-b .day-head { position: static; }
+
     /* ---- trip break -------------------------------------------------- */
     .brk {
       display: flex; align-items: center; gap: 0.55rem;
@@ -250,6 +267,40 @@
     <div id="plan-list">
       {% for r in rows %}
 
+        {#- RUNS OF ALREADY-FLOWN FLIGHTS FOLD AWAY (1.30.1, fixed 1.30.2).
+
+            They sort to the top, so a whole-month paste made you scroll
+            two weeks of flights that had already happened to reach the
+            one decision you came for.
+
+            ONLY `flown` ROWS, and that restriction is the fix. A `flown`
+            leg is in the paste AND on the roster and is frozen by the
+            1.22.0 rule — there is nothing to decide about it. A
+            `gone_flown` leg is NEVER folded however far past it is: that
+            is the reassignment case, where the paste has stopped
+            mentioning a leg still sitting on the roster, and unless the
+            pilot removes it the app goes on believing he flew it. 1.30.1
+            folded those too and hid the most consequential decision on
+            the page. See build_plan_rows.
+
+            SHUT, but NOT REMOVED. The rows stay in the DOM, still submit
+            their inputs, and are still counted for trip breaks — the
+            submit handler walks querySelectorAll precisely so nesting
+            them changes nothing. Dropping them from the form would be
+            the 1.30.1 bug again in a new place.
+
+            Opened and closed from flags computed in ONE pass server-side,
+            never from two separate template conditions: invariant 31, and
+            this now opens more than once per page. -#}
+        {% if r.fold_start %}
+        <details class="pastfold">
+          <summary>
+            <span>{{ r.fold_count }} flight{{ "s" if r.fold_count != 1 }} already flown</span>
+            <span class="pf-v">nothing to decide</span>
+          </summary>
+          <div class="pastfold-b">
+        {% endif %}
+
         {% if r.new_day %}
         <div class="day-head">{{ r.date_label }}</div>
         {% endif %}
@@ -340,6 +391,14 @@
           <input type="hidden" name="removable_id" value="{{ r.id }}">
           {% endif %}
         </div>
+
+        {#- Closed on the LAST row of the run, from a flag set in
+            build_plan_rows. Both markers come from the same pass over the
+            same list, so the tags cannot get out of step. -#}
+        {% if r.fold_end %}
+          </div>
+        </details>
+        {% endif %}
       {% endfor %}
     </div>
 
@@ -489,19 +548,40 @@
     });
 
     // TRIP BREAKS ARE PAIRED BY POSITION with the submitted legs, so this
-    // has to count exactly the rows the server will receive: rows that
-    // came from the paste AND are still switched on. A row that is off
-    // submits nothing and must not consume a slot, or every break after
-    // it lands one leg out.
+    // must count EXACTLY the rows the server will receive — no more, no
+    // fewer. Get it wrong and every break after the mistake lands on the
+    // wrong leg, or falls off the end entirely.
+    //
+    // THE 1.30.1 BUG, AND WHY THE TEST IS NOW WHAT IT IS.
+    // This asked `data-on !== '1'`, which it took to mean "is this row
+    // being submitted". It does not. An ALREADY-FLOWN row in the paste
+    // reported data-on="0" — nothing about it is decidable, so it had no
+    // default — while the template rendered its hidden inputs anyway,
+    // because it is in the paste and the merge does receive it. So on a
+    // whole-month paste with two trips already flown, the browser sent
+    // eight legs and four trip-start values. The server pairs them by
+    // index, ran out at four, and defaulted the remaining legs to "not a
+    // trip start" — collapsing every later trip into the first one. That
+    // is the calendar showing one long trip.
+    //
+    // It now asks the DOM the SAME QUESTION THE BROWSER WILL ASK: is this
+    // row's `leg_date` input present and enabled? A disabled input is not
+    // submitted, so this cannot disagree with the form no matter what any
+    // attribute claims. `data-on` is for drawing the row; it is not
+    // evidence about the request.
+    //
+    // querySelectorAll, not `.children`, so that rows nested inside the
+    // already-flown fold below are still counted — in DOCUMENT order,
+    // which is the order the form submits in.
     document.getElementById('review-form').addEventListener('submit', function (e) {
       var form = e.target;
       var starts = [];
       var afterBreak = true;     // the first flight is always a trip start
-      Array.prototype.forEach.call(list.children, function (child) {
+      Array.prototype.forEach.call(list.querySelectorAll('.brk, .prow'),
+      function (child) {
         if (child.classList.contains('brk')) { afterBreak = true; return; }
-        if (!child.classList.contains('prow')) { return; }
-        if (!child.hasAttribute('data-leg')) { return; }
-        if (child.getAttribute('data-on') !== '1') { return; }
+        var d = child.querySelector('input[name="leg_date"]');
+        if (!d || d.disabled) { return; }
         starts.push(afterBreak ? '1' : '0');
         afterBreak = false;
       });
