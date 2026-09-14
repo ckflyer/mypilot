@@ -454,8 +454,21 @@ check("there is a shared throttle to call", "def throttle()" in ls)
 check("the probe goes through it", "throttle()" in al and "from .livesource import throttle" in al)
 check("429 is reported as rate limiting, not failure",
       "rate limited (feed is up" in al)
+# REWRITTEN 1.30.0. This pinned the exact expression
+# `if (ok or limited) and e.get`, which changed when the probe loop
+# stopped testing DISABLED feeds — the `e.get("enabled")` half moved to
+# the top of the loop as a `continue`, because probing a feed the poller
+# will never call is pure wall-clock cost on a page load. The RULE is
+# unchanged and is what is asserted now: a 429 still counts as a working
+# feed, because it means the feed ANSWERED and asked us to slow down.
+_probe_loop = src.split("probes = []", 1)[1].split("out.append(\"<form", 1)[0]
 check("...and counts as a working feed",
-      "if (ok or limited) and e.get" in src)
+      "limited = (status == 429)" in _probe_loop and
+      "if ok or limited:" in _probe_loop, _probe_loop[:300])
+check("...and a switched-off feed is not probed at all, because a probe "
+      "costs a throttled round trip",
+      'if not e.get("enabled", True):' in _probe_loop and
+      "continue" in _probe_loop)
 check("the summary falls back to REAL lookup history when the probe fails",
       "probe says no, but %d of the last %d REAL lookups succeeded" in src)
 
@@ -498,11 +511,34 @@ print("\n-- admin page fits a phone --")
 check("the jump pills are gone", 'class="jump"' not in ah)
 check("generated diagnostics rows no longer force nowrap",
       "white-space:nowrap;vertical-align:top'>%s</td>" not in src)
-check("...and break long tokens instead", "word-break:break-word" in src)
+# REWRITTEN 1.30.0. The generated markup no longer carries inline styles
+# at all — it emits the page's own classes, so `word-break:break-word`
+# moved out of main.py and into the stylesheet with everything else. The
+# rule it defends is what matters: a 180-character raw API error must
+# break rather than push the page sideways on a phone.
+check("...and break long tokens instead",
+      "overflow-wrap: anywhere" in ah or "word-break: break-word" in ah)
+# REWRITTEN 1.30.0, and the rule got STRONGER rather than weaker.
+#
+# These pinned `.diag { overflow-wrap: anywhere; }`, `table-layout: fixed`
+# and `min-width: 0 !important` — three rules that existed to stop a
+# four-column TABLE of inline-styled inputs from pushing the admin page
+# sideways on a phone. The table is gone: the feeds editor is stacked
+# blocks now, because a table that CAN overflow will always choose to
+# overflow before it wraps, and `!important` on a generated input was a
+# cover for that rather than a fix.
+#
+# So the assertion is the rule itself. Long unbreakable tokens (a
+# 180-character raw API error, a feed URL) must break, and nothing in
+# the panel may carry a fixed minimum width that a phone cannot honour.
+_panel_css = ah.split("#diagpanel", 1)[1].split("/* The console", 1)[0]
 check("the embedded diagnostics block is width-constrained",
-      ".diag { overflow-wrap: anywhere; }" in ah and "table-layout: fixed" in ah)
-check("...including its inline-styled inputs",
-      "min-width: 0 !important" in ah)
+      "overflow-wrap: anywhere" in ah and "min-width: 0" in _panel_css,
+      _panel_css[:200])
+check("...and the feeds editor is not a table that can overflow",
+      ".feedlist" in ah and "<table" not in
+      src.split("def build_diagnostics_html", 1)[1]
+         .split("def admin_diagnostics_panel", 1)[0])
 
 print("\n-- ADS-B feeds after airplanes.live withdrew its free API --")
 check("the open community feeds are the defaults",

@@ -1,17 +1,28 @@
-{# BUILT_FOR 1.29.2 #}
+{# BUILT_FOR 1.30.0 #}
 {#- The ADMIN page. Everything that operates the INSTALL, on one screen.
 
     NAMING, because it caused real confusion. /flights is one pilot's
     SCHEDULE — the FFDO paste, the leg list, the month filter. This is the
-    whole install: who has an account, whether ADS-B is arriving, why a leg
-    decided what it decided. Two different scopes and, on a shared install,
-    two different people. Through 1.6.0 both lived at /admin while the tab
-    bar called that page "Flights", which is how administration ended up
-    stacked underneath somebody's trip list.
+    whole install: who has an account, what people are reporting, whether
+    ADS-B is arriving, why a leg decided what it decided. Two different
+    scopes and, on a shared install, two different people.
 
-    Deliberately plain and long rather than clever: four sections, stacked,
-    each reachable by anchor. You open this page when something is wrong,
-    and a layout you have to learn is the wrong layout for that.
+    REBUILT 1.30.0 onto the grouped list settings has used since 1.25.0
+    (`.seclabel` / `.glist` / `.grow` in app.css). It was the last page
+    still wearing the old stacked-cards look, and it was also the longest
+    page in the app — four sections that each wanted to be read top to
+    bottom, all open at once, on a phone. Collapsed rows that STATE THEIR
+    OWN VALUE fix both at once: the page is short, and shut is not empty.
+
+    The rows are native <details>, per invariant 16 — they open with no
+    JavaScript, so a page you came to BECAUSE something is broken does not
+    depend on a script to be readable. Keyboard and screen-reader
+    behaviour arrive correct for free.
+
+    ONE SECTION IS DIFFERENT AND DELIBERATELY SO. "Live tracking" is
+    fetched after the page loads, because building it makes real network
+    calls (see main.admin_diagnostics_panel). Everything else here is a
+    database read and is instant.
 -#}
 <!DOCTYPE html>
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
@@ -22,47 +33,49 @@
   {% include "partials/app_shell.html" %}
   <link rel="stylesheet" href="/static/app.css?v={{ version }}">
   <style>
+    /* PAGE LAYOUT ONLY. Everything that draws a row, a group or a
+       segmented control lives in static/app.css — same rule settings.html
+       follows, and the reason both pages can look alike without either
+       owning the component. Invariant 25. */
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: var(--bg); color: var(--text); min-height: 100vh;
-      padding: max(1.25rem, env(safe-area-inset-top)) max(1.25rem, env(safe-area-inset-right)) calc(5.5rem + env(safe-area-inset-bottom)) max(1.25rem, env(safe-area-inset-left));
-      max-width: 760px; margin: 0 auto;
+      max-width: 640px; margin: 0 auto;
+      padding: max(1.25rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) calc(5.5rem + env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
     }
-    .brand { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.2rem; }
-    h1 { font-size: 1.35rem; margin-bottom: 0.3rem; }
-    .lede { color: var(--muted); font-size: 0.85rem; line-height: 1.55; margin-bottom: 1rem; }
+    .brand { font-size: 0.95rem; font-weight: 700; margin: 0 0 0.2rem 0.4rem; }
+    h1 { font-size: 1.75rem; letter-spacing: -0.02em; margin: 0 0 0.2rem 0.4rem; }
+    .sub { color: var(--muted); font-size: 0.85rem; margin: 0 0 0.5rem 0.4rem; line-height: 1.5; }
     a { color: var(--accent); }
-    h2 {
-      font-size: 0.78rem; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.07em; color: var(--muted);
-      margin: 2rem 0 0.6rem; padding-top: 1.25rem;
-      border-top: 1px solid var(--border); scroll-margin-top: 1rem;
-    }
-    h2:first-of-type { margin-top: 0.5rem; }
-    h3 { font-size: 0.9rem; margin: 1.25rem 0 0.4rem; }
-    .card { background: var(--card); border-radius: 12px; padding: 1rem; margin-bottom: 0.75rem; }
+    .flash { padding: 0.7rem 0.9rem; border-radius: 10px; margin: 0 0 0.9rem; font-size: 0.875rem; font-weight: 600; }
+    .flash.err  { background: rgba(248,113,113,0.15); color: var(--bad); }
+    .flash.good { background: rgba(34,197,94,0.15); color: var(--good); }
     .hint { color: var(--muted); font-size: 0.8rem; line-height: 1.55; margin: 0.75rem 0 0; }
     .hint:first-child { margin: 0 0 0.85rem; }
     code { background: var(--input-bg); padding: 0.1rem 0.3rem; border-radius: 4px; font-size: 0.75rem; font-family: ui-monospace, monospace; }
+    label { display: block; margin-bottom: 0.3rem; font-size: 0.8125rem; color: var(--muted); }
+    input[type=text], input[type=password], select, textarea {
+      width: 100%; padding: 0.55rem 0.65rem; background: var(--input-bg);
+      border: 1px solid var(--border); border-radius: 9px;
+      color: var(--text); font-size: 0.9rem; font-family: inherit;
+    }
     button {
-      padding: 0.5rem 0.85rem; border-radius: 8px; font-size: 0.85rem;
+      padding: 0.5rem 0.85rem; border-radius: 9px; font-size: 0.85rem;
       font-weight: 600; cursor: pointer; border: 1px solid var(--border);
       background: transparent; color: var(--text);
     }
-    button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-    /* Destructive actions are the only red on this page, and never the first
-       control in a row — a mis-tap should land on something reversible. */
-    button.danger { color: #ef4444; }
-    button.danger:hover { border-color: #ef4444; }
-    input[type=text], input[type=password], select {
-      background: var(--input-bg); color: var(--text);
-      border: 1px solid var(--border); border-radius: 8px;
-      padding: 0.5rem; font-size: 0.85rem; width: 100%;
-    }
-    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    button.primary { background: var(--accent-fill); color: #fff; border-color: transparent; }
+    /* Destructive actions are the only red on this page, and never the
+       first control in a row — a mis-tap should land on something
+       reversible. */
+    button.danger { color: var(--bad); }
+    button.danger:hover { border-color: var(--bad); }
+    .btnrow { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }
+    .btnrow form { margin: 0; }
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 0.4rem; }
     table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-    th { color: var(--muted); text-align: left; font-size: 0.7rem; text-transform: uppercase; padding: 0.4rem 0.3rem; font-weight: 500; }
+    th { color: var(--muted); text-align: left; font-size: 0.7rem; text-transform: uppercase; padding: 0.4rem 0.3rem; font-weight: 600; }
     td { padding: 0.55rem 0.3rem; border-top: 1px solid var(--border); vertical-align: top; }
     .muted { color: var(--muted); }
     .nowrap { white-space: nowrap; }
@@ -71,211 +84,406 @@
     .row-actions { text-align: right; white-space: nowrap; }
     .row-actions form { display: inline; margin: 0; }
     .row-actions button { margin: 0 0 0.25rem 0.25rem; padding: 0.35rem 0.6rem; font-size: 0.75rem; }
-    .sim-start { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .sub2 { display: block; color: var(--muted); font-size: 0.72rem; margin-top: 0.15rem; }
+    .ok { color: var(--good); }
+    .sim-start { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
     .sim-start select { flex: 1; min-width: 12rem; }
-    .sub { display: block; color: var(--muted); font-size: 0.72rem; margin-top: 0.15rem; }
-    .ok { color: #22c55e; }
     dl.scenarios { margin: 0.75rem 0 0; font-size: 0.8rem; }
     dl.scenarios dt { font-weight: 700; margin-top: 0.6rem; }
     dl.scenarios dd { margin: 0.15rem 0 0; color: var(--muted); line-height: 1.5; }
-    details > summary { cursor: pointer; font-size: 0.8rem; color: var(--muted); margin-top: 0.85rem; }
-    /* Promotion is deliberately two-step. See the note inside the panel. */
-    .confirm-row { display: none; }
-    .confirm-row.open { display: table-row; }
-    .confirm-row input { margin: 0.45rem 0; }
-    .warn { border-left: 3px solid var(--warn, #f59e0b); padding-left: 0.7rem; font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
-    .flash { border-radius: 8px; padding: 0.6rem 0.8rem; font-size: 0.82rem; margin-bottom: 0.9rem; }
-    .flash.err { border: 1px solid #ef4444; color: #ef4444; }
-    .flash.good { border: 1px solid #22c55e; color: #22c55e; }
+    details.inner > summary { cursor: pointer; font-size: 0.8rem; color: var(--muted); margin-top: 0.85rem; }
+    .warn { border-left: 3px solid var(--warn); padding-left: 0.7rem; font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+    /* ---- the feedback inbox ------------------------------------------ */
+    .fbrow {
+      border-top: 1px solid var(--border); padding: 0.75rem 0;
+      display: grid; gap: 0.3rem;
+    }
+    .fbrow:first-child { border-top: 0; }
+    .fb-top { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: baseline; }
+    .fb-who { font-weight: 600; font-size: 0.9rem; }
+    .fb-tag {
+      font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.04em; padding: 0.15rem 0.4rem; border-radius: 999px;
+      background: var(--input-bg); color: var(--muted);
+    }
+    .fb-tag.bug { background: rgba(239,68,68,0.15); color: var(--bad); }
+    .fb-tag.idea { background: rgba(34,197,94,0.15); color: var(--good); }
+    .fb-tag.viewer { background: rgba(245,158,11,0.18); color: var(--warn); }
+    .fb-when { color: var(--muted); font-size: 0.74rem; margin-left: auto; }
+    /* pre-wrap, because a bug report is prose somebody typed with line
+       breaks in it and collapsing them loses the shape of what they said. */
+    .fb-msg {
+      white-space: pre-wrap; overflow-wrap: anywhere;
+      font-size: 0.875rem; line-height: 1.5;
+      background: var(--input-bg); border-radius: 9px; padding: 0.6rem 0.7rem;
+    }
+    .fb-meta { color: var(--muted); font-size: 0.72rem; overflow-wrap: anywhere; line-height: 1.5; }
+    .fbrow.done { opacity: 0.55; }
+    .fb-acts { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+    .fb-acts form { margin: 0; }
+    .fb-acts button { padding: 0.3rem 0.6rem; font-size: 0.74rem; }
+
+    /* ---- the generated diagnostics panel ------------------------------
+       These classes are emitted by main.build_diagnostics_html. They are
+       declared HERE rather than inline in that function, which used to
+       write hardcoded light-theme greys and then string-replace them for
+       palette variables on the way out — so the only way to know what a
+       colour would be was to read a substitution table at the bottom of a
+       200-line function. */
+    #diagpanel { overflow-wrap: anywhere; }
+    #diagpanel h3 { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin: 1.4rem 0 0.5rem; }
+    #diagpanel h3:first-child { margin-top: 0.2rem; }
+    #diagpanel h4 { font-size: 0.9rem; margin: 1rem 0 0.4rem; }
+    .dcard { background: var(--input-bg); border-radius: 10px; padding: 0.3rem 0.75rem; }
+    .kv { display: flex; flex-wrap: wrap; gap: 0.3rem 0.75rem; justify-content: space-between; padding: 0.4rem 0; border-top: 1px solid var(--border); font-size: 0.8rem; }
+    .kv:first-child { border-top: 0; }
+    .kv .k { color: var(--muted); flex: 0 0 auto; }
+    .kv .v { text-align: right; overflow-wrap: anywhere; min-width: 0; font-family: ui-monospace, monospace; font-size: 0.76rem; }
+    .kv .v.good { color: var(--good); }
+    .kv .v.bad { color: var(--bad); font-weight: 600; }
+    .note { color: var(--muted); font-size: 0.76rem; line-height: 1.5; margin: 0.5rem 0; }
+    .alert { color: var(--bad); font-size: 0.8rem; line-height: 1.5; margin: 0.5rem 0; }
+    .pill { font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.15rem 0.45rem; border-radius: 999px; white-space: nowrap; }
+    .pill.good { background: rgba(34,197,94,0.16); color: var(--good); }
+    .pill.warn { background: rgba(245,158,11,0.18); color: var(--warn); }
+    .pill.bad  { background: rgba(239,68,68,0.15); color: var(--bad); }
+    .pill.off  { background: var(--input-bg); color: var(--muted); }
+
+    /* THE FEEDS EDITOR IS STACKED ROWS, NOT A TABLE (1.30.0).
+       It was four columns — a checkbox, a URL input, a key input and a
+       status — and on a phone the two inputs could not both fit, so the
+       whole admin page scrolled sideways. A table that CAN overflow will
+       always choose to overflow. Each feed is now a block that wraps
+       naturally at any width. */
+    .feedlist { display: grid; gap: 0.5rem; margin-top: 0.5rem; }
+    .feedrow {
+      display: grid; grid-template-columns: 1fr auto; gap: 0.4rem;
+      background: var(--input-bg); border: 1px solid var(--border);
+      border-radius: 10px; padding: 0.6rem 0.7rem;
+    }
+    .feedrow.isnew { opacity: 0.8; }
+    .feedname { display: flex; align-items: center; gap: 0.5rem; margin: 0; font-size: 0.85rem; color: var(--text); cursor: pointer; }
+    .feedname input { width: auto; }
+    .feedhost { font-weight: 600; overflow-wrap: anywhere; }
+    .feeddetail { grid-column: 1 / -1; color: var(--muted); font-size: 0.72rem; line-height: 1.45; overflow-wrap: anywhere; }
+    .feedurl, .feedkey {
+      grid-column: 1 / -1; font-family: ui-monospace, monospace;
+      font-size: 0.74rem; padding: 0.4rem 0.5rem; min-width: 0;
+    }
+
+    /* Recent lookups, inside a <details>. Same shape as a settings row so
+       the panel does not introduce a second kind of collapsible. */
+    .dfold { border: 1px solid var(--border); border-radius: 10px; margin-top: 0.9rem; }
+    .dfold > summary {
+      display: flex; align-items: center; gap: 0.7rem; cursor: pointer;
+      padding: 0.65rem 0.75rem; font-size: 0.85rem; font-weight: 600;
+      list-style: none; -webkit-tap-highlight-color: transparent;
+    }
+    .dfold > summary::-webkit-details-marker { display: none; }
+    .dfold > summary::marker { content: ""; }
+    .dfold > summary::after { content: "›"; margin-left: auto; color: var(--muted); font-size: 1.1rem; line-height: 1; }
+    .dfold[open] > summary::after { content: "⌄"; }
+    .dfold-v { color: var(--muted); font-weight: 400; font-size: 0.78rem; margin-left: auto; }
+    .dfold[open] .dfold-v { display: none; }
+    .dfold-b { padding: 0 0.75rem 0.75rem; border-top: 1px solid var(--border); }
+    .lookups { display: grid; gap: 0.3rem; }
+    .lookup {
+      display: grid; grid-template-columns: auto auto 1fr; gap: 0.15rem 0.5rem;
+      font-size: 0.72rem; padding: 0.4rem 0; border-top: 1px solid var(--border);
+    }
+    .lookup:first-child { border-top: 0; }
+    .lk-cs { font-weight: 700; font-family: ui-monospace, monospace; }
+    .lk-at, .lk-feed { color: var(--muted); font-family: ui-monospace, monospace; }
+    .lk-detail { grid-column: 1 / -1; overflow-wrap: anywhere; line-height: 1.45; }
+    .lookup.good .lk-cs { color: var(--good); }
+    .lookup.bad  .lk-cs { color: var(--bad); }
+    .diag-loading { color: var(--muted); font-size: 0.82rem; padding: 0.3rem 0; }
+
     /* The console. A fixed-height scroller rather than an endless page:
        the log is the longest thing on this page by an order of magnitude,
        and letting it run free means every other section is unreachable
        once anything has been logged. */
     .console {
       max-height: 60vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
-      background: var(--input-bg); border-radius: 8px;
+      background: var(--input-bg); border-radius: 9px;
       padding: 0.2rem 0.7rem; margin-top: 0.5rem;
     }
     .console.tailing { border: 1px solid var(--accent); }
-    .log-line {
-      font-family: ui-monospace, monospace; font-size: 0.72rem;
-      border-top: 1px solid var(--border); padding: 0.45rem 0;
-      line-height: 1.5; overflow-wrap: anywhere;
-    }
+    .log-line { font-family: ui-monospace, monospace; font-size: 0.72rem; border-top: 1px solid var(--border); padding: 0.45rem 0; line-height: 1.5; overflow-wrap: anywhere; }
     .log-line:first-child { border-top: 0; }
     .log-line.is-new { animation: flash-in 1.2s ease-out; }
-    @keyframes flash-in { from { background: rgba(59,130,246,0.18); } to { background: transparent; } }
+    @keyframes flash-in { from { background: rgba(99,102,241,0.18); } to { background: transparent; } }
     .log-what { color: var(--accent); font-weight: 600; }
-    .log-who { color: var(--muted); }
-    .log-k { color: var(--muted); }
+    .log-who, .log-k { color: var(--muted); }
     .log-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: space-between; margin-top: 0.75rem; }
     .log-bar-right { display: flex; gap: 0.4rem; align-items: center; }
-    .log-bar button, .log-bar .dl {
-      padding: 0.35rem 0.7rem; font-size: 0.75rem; border-radius: 8px;
-      border: 1px solid var(--border); color: var(--text);
-      text-decoration: none; background: transparent; cursor: pointer;
-    }
+    .log-bar button, .log-bar .dl { padding: 0.35rem 0.7rem; font-size: 0.75rem; border-radius: 8px; border: 1px solid var(--border); color: var(--text); text-decoration: none; background: transparent; cursor: pointer; }
     .log-bar button.live { border-color: var(--accent); color: var(--accent); }
     .filter-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-bottom: 0.5rem; }
     .filter-row label { flex: 1; min-width: 7.5rem; font-size: 0.72rem; color: var(--muted); }
     .filter-row select { width: 100%; }
     .clear-filters { font-size: 0.75rem; align-self: center; }
-    /* The diagnostics block is GENERATED markup with inline styles of its
-       own. Rather than chase every one, the section is constrained here:
-       nothing inside may exceed its width, long tokens break, and the two
-       places that genuinely need a wide table (the feeds editor, the
-       lookup history) scroll on their own instead of pushing the page.
-       Before 1.8.0 the whole admin page scrolled sideways on a phone. */
-    .diag { overflow-wrap: anywhere; }
-    .diag table { width: 100%; table-layout: fixed; font-size: 0.78rem; }
-    .diag td, .diag th { word-break: break-word; padding: 0.3rem 0.5rem 0.3rem 0; }
-    .diag code { background: none; padding: 0; font-size: 0.74rem; }
-    .diag h2 { font-size: 0.78rem; margin: 1.4rem 0 0.4rem; padding-top: 0.9rem; }
-    .diag h3 { font-size: 0.85rem; margin: 1rem 0 0.3rem; }
-    .diag input { max-width: 100%; min-width: 0 !important; box-sizing: border-box; }
-    .diag p { font-size: 0.78rem; line-height: 1.5; color: var(--muted); margin: 0.4rem 0; }
-    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+    /* Promotion is deliberately two-step. See the note inside the panel. */
+    .confirm-row { display: none; }
+    .confirm-row.open { display: table-row; }
+    .confirm-row input { margin: 0.45rem 0; }
   </style>
 </head>
 <body>
   <div class="brand">MyPilot</div>
   <h1>Admin</h1>
-  <p class="lede">Running the install. Your own schedule is on the <a href="/flights">Flights</a> page; this is everything else.</p>
-
+  <p class="sub">Running the install. Your own schedule is on the
+    <a href="/flights">Flights</a> page; this is everything else.</p>
 
   {% if flash %}<div class="flash {{ flash_kind }}">{{ flash }}</div>{% endif %}
 
-  <h2 id="people">People</h2>
-  <div class="card">
-    <div class="table-scroll">
-      <table>
-        <thead><tr><th>Username</th><th>Email</th><th>Created</th><th></th></tr></thead>
-        <tbody>
-          {% for u in people %}
-          <tr>
-            <td>{{ u.username }}{% if u.is_admin %} <span class="badge">admin</span>{% endif %}{% if u.id == pilot_id %} <span class="you">you</span>{% endif %}</td>
-            <td class="muted">{{ u.email or '—' }}</td>
-            <td class="muted nowrap">{{ u.created_at[:10] if u.created_at else '—' }}</td>
-            <td class="row-actions">
-              {% if not u.is_admin %}
-              <button type="button" onclick="toggleRow('promote-{{ u.id }}')">Make admin…</button>
-              {% elif u.id != pilot_id %}
-              <button type="button" onclick="toggleRow('demote-{{ u.id }}')">Remove admin…</button>
-              {% endif %}
-              {% if u.id != pilot_id %}
-              <form method="post" action="/admin/users/delete/{{ u.id }}" onsubmit="return confirm('Delete {{ u.username }}\'s account and all their flight data? This cannot be undone.');">
-                <button type="submit" class="danger">Delete</button>
-              </form>
-              {% endif %}
-            </td>
-          </tr>
-          {% if not u.is_admin %}
-          <tr class="confirm-row" id="promote-{{ u.id }}">
-            <td colspan="4">
-              <p class="warn">An admin can see and delete every account on this install,
-                including yours, and can promote anyone else. Confirm with
-                <strong>your own</strong> password.</p>
-              <form method="post" action="/admin/users/promote/{{ u.id }}">
-                <label class="sr-only" for="pw-{{ u.id }}">Your password</label>
-                <input type="password" id="pw-{{ u.id }}" name="password" placeholder="Your password" autocomplete="current-password" required>
-                <button type="submit" class="primary">Make {{ u.username }} an admin</button>
-                <button type="button" onclick="toggleRow('promote-{{ u.id }}')">Cancel</button>
-              </form>
-            </td>
-          </tr>
-          {% elif u.id != pilot_id %}
-          <tr class="confirm-row" id="demote-{{ u.id }}">
-            <td colspan="4">
-              <form method="post" action="/admin/users/demote/{{ u.id }}">
-                <label class="sr-only" for="dpw-{{ u.id }}">Your password</label>
-                <input type="password" id="dpw-{{ u.id }}" name="password" placeholder="Your password" autocomplete="current-password" required>
-                <button type="submit">Remove admin from {{ u.username }}</button>
-                <button type="button" onclick="toggleRow('demote-{{ u.id }}')">Cancel</button>
-              </form>
-            </td>
-          </tr>
-          {% endif %}
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <p class="hint">
-      To add someone, send them this server's <a href="/register">/register</a> page.
-      They create their own account, then you promote them here. Only the first
-      account ever created is an admin automatically. <strong>The last remaining admin
-      cannot be removed or deleted</strong> — an install with flight data and nobody
-      able to administer it has no way back short of editing SQLite by hand.
-    </p>
-  </div>
+  {#- THE ROW MACRO. One definition, so a row cannot be drawn two ways —
+      same reasoning as settings.html's, which this matches deliberately.
+      `value` is the summary the collapsed row reports, and is the reason
+      a shut page is still informative. -#}
+  {% macro rowhead(icon, title, value) %}
+    <summary class="grow-head">
+      <span class="grow-icon">{{ icon }}</span>
+      <span class="grow-title">{{ title }}</span>
+      <span class="grow-value">{{ value }}</span>
+      <span class="grow-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 5 16 12 9 19"/></svg></span>
+    </summary>
+  {% endmacro %}
 
-  <h2 id="test">Test mode</h2>
-  <div class="card">
-    {% if sim_rows %}
-    <p class="hint">A rehearsal is running. These legs are <strong>invented</strong> — no AeroAPI
-      query can be spent on them, no ADS-B request is made for them, and they are
-      excluded from any logbook. They appear on Flights and the tracker exactly as a
-      real leg would, which is the point.</p>
-    <div class="table-scroll">
-      <table>
-        <thead><tr><th>Leg</th><th>Phase</th><th>Closed</th><th></th></tr></thead>
-        <tbody>
-          {% for r in sim_rows %}
-          <tr>
-            <td><strong>{{ r.callsign }}</strong><span class="sub">{{ r.scenario }}</span></td>
-            <td>{{ r.phase }}<span class="sub">{% if r.airborne %}airborne seen{% endif %}{% if r.landed %} · landed seen{% endif %}{% if r.stopped_since %} · stopped{% endif %}</span></td>
-            <td>{% if r.closed %}<span class="ok">{{ r.closed_by }}</span>{% else %}open{% endif %}</td>
-            <td class="row-actions">
-              <form method="post" action="/admin/test/age"><input type="hidden" name="leg_id" value="{{ r.id }}"><input type="hidden" name="minutes" value="30"><button type="submit">Age 30m</button></form>
-              <form method="post" action="/admin/test/age"><input type="hidden" name="leg_id" value="{{ r.id }}"><input type="hidden" name="minutes" value="180"><button type="submit">Age 3h</button></form>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <p class="hint"><strong>Age</strong> shifts what the leg has RECORDED backwards, so a rule that
-      matures on a long clock fires now. Nothing is faked and no threshold is lowered:
-      after ageing 30 minutes the leg genuinely has been stopped for 30 minutes, and the
-      real closure rule decides on the real number. Use 30m for the long-stop route, 3h
-      for the backstop. The poller re-checks every 20 seconds, so give it a moment and reload.</p>
-    <form method="post" action="/admin/test/stop" onsubmit="return confirm('Delete all simulated legs?');">
-      <button type="submit" class="danger">Stop &amp; delete simulated legs</button>
-    </form>
-    {% else %}
-    <p class="hint">Rehearse a flight without waiting for a real one and without spending a
-      single AeroAPI credit. Each scenario is named for the bug it reproduces. The
-      simulator produces <strong>position reports only</strong> — the app's own tracking,
-      tagging and closure code then runs on them unchanged, so what you see is what a
-      real flight would do.</p>
-    <form method="post" action="/admin/test/start" class="sim-start">
-      <label class="sr-only" for="scenario">Scenario</label>
-      <select id="scenario" name="scenario">
-        {% for sc in sim_scenarios %}
-        <option value="{{ sc.key }}">{{ sc.title }} — {{ sc.route }}{% if sc.legs > 1 %}, {{ sc.legs }} legs{% endif %} ({{ sc.block_min }} min)</option>
+  {#- INBOX FIRST, and open when there is something unread.
+
+      It is the only section here that someone else can put something in.
+      Everything below it is a thing the admin goes looking for; this is a
+      thing that arrives, and a message nobody notices is the same as no
+      message. Opening it only when `new` is non-zero means it is loud
+      exactly once per report and quiet the rest of the time. -#}
+  <div class="seclabel" id="inbox">Inbox</div>
+  <div class="glist">
+    <details class="grow" {% if inbox_counts.new %}open{% endif %}>
+      {{ rowhead('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16v11H13l-4.5 3.5v-3.5H4z"/><path d="M12 8.4v3.4"/><circle cx="12" cy="14.1" r="0.6" fill="currentColor" stroke="none"/></svg>'|safe, 'Feedback & bug reports',
+         ('<span class="alert">' ~ inbox_counts.new ~ ' new</span>') if inbox_counts.new else (inbox_counts.total ~ ' total' if inbox_counts.total else 'None yet') | safe) }}
+      <div class="grow-body">
+        {% if not inbox %}
+        <p class="hint">Nothing reported yet. Anyone signed in can send one from
+          <strong>Settings → Report a problem</strong> — including viewers, who have
+          no account but do have the app in front of them. Their build, their page
+          and their device are attached automatically.</p>
+        {% else %}
+        <p class="hint">Newest first. <strong>Build</strong> is the one thing worth
+          reading before anything else: a phone serving a cached copy of the previous
+          release looks exactly like a real bug until you know the version.</p>
+        {% for f in inbox %}
+        <div class="fbrow {{ 'done' if f.status == 'done' }}">
+          <div class="fb-top">
+            <span class="fb-who">{{ f.reporter }}</span>
+            <span class="fb-tag {{ f.kind }}">{{ f.kind_label }}</span>
+            {% if f.is_viewer %}<span class="fb-tag viewer">viewer</span>{% endif %}
+            {% if f.status != 'new' %}<span class="fb-tag">{{ f.status }}</span>{% endif %}
+            <span class="fb-when">{{ f.date_label }}</span>
+          </div>
+          <div class="fb-msg">{{ f.message }}</div>
+          <div class="fb-meta">
+            build <strong>{{ f.app_version or '?' }}</strong>{% if f.app_version and f.app_version != version %}
+            <span class="alert">· not this build ({{ version }})</span>{% endif %}
+            · page <code>{{ f.page or '?' }}</code>
+            {% if f.user_agent %}<br>{{ f.user_agent }}{% endif %}
+            {% if f.handled_at %}<br>marked done {{ f.handled_at[:16]|replace('T',' ') }}{% if f.handled_by %} by {{ f.handled_by }}{% endif %}{% endif %}
+          </div>
+          <div class="fb-acts">
+            {% if f.status != 'open' %}
+            <form method="post" action="/admin/feedback/{{ f.id }}/status">
+              <input type="hidden" name="status" value="open"><button type="submit">Looking at it</button>
+            </form>
+            {% endif %}
+            {% if f.status != 'done' %}
+            <form method="post" action="/admin/feedback/{{ f.id }}/status">
+              <input type="hidden" name="status" value="done"><button type="submit">Mark done</button>
+            </form>
+            {% else %}
+            <form method="post" action="/admin/feedback/{{ f.id }}/status">
+              <input type="hidden" name="status" value="new"><button type="submit">Reopen</button>
+            </form>
+            {% endif %}
+            <form method="post" action="/admin/feedback/{{ f.id }}/delete"
+                  onsubmit="return confirm('Delete this report? It cannot be recovered.');">
+              <button type="submit" class="danger">Delete</button>
+            </form>
+          </div>
+        </div>
         {% endfor %}
-      </select>
-      <button type="submit" class="primary">Start test flight</button>
-    </form>
-    <details>
-      <summary>What each scenario proves</summary>
-      <dl class="scenarios">
-        {% for sc in sim_scenarios %}<dt>{{ sc.title }}</dt><dd>{{ sc.description }}</dd>{% endfor %}
-      </dl>
+        <div class="btnrow">
+          <a class="dl" href="/admin/feedback/download" style="padding:0.35rem 0.7rem;font-size:0.75rem;border-radius:8px;border:1px solid var(--border);color:var(--text);text-decoration:none">Download all as text</a>
+        </div>
+        {% endif %}
+      </div>
     </details>
-    {% endif %}
   </div>
 
-  <h2 id="diagnostics">Live tracking</h2>
-  <div class="card">
-    <p class="hint">Read top to bottom. <strong>The first red line is the problem.</strong> Every
-      step of the live path is listed separately, because "no tracking" has half a dozen
-      causes that look identical from outside: the poller not running, the callsign never
-      resolving, the provider returning nothing, or the match logic refusing what it returned.</p>
-    {{ diagnostics_html }}
+  <div class="seclabel" id="people">People</div>
+  <div class="glist">
+    <details class="grow">
+      {{ rowhead('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 5.2a3.2 3.2 0 0 1 0 5.6"/><path d="M17.5 14.2A6.5 6.5 0 0 1 21.5 20"/></svg>'|safe, 'Accounts', people|length ~ (' account' if people|length == 1 else ' accounts')) }}
+      <div class="grow-body">
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Username</th><th>Email</th><th>Created</th><th></th></tr></thead>
+            <tbody>
+              {% for u in people %}
+              <tr>
+                <td>{{ u.username }}{% if u.is_admin %} <span class="badge">admin</span>{% endif %}{% if u.id == pilot_id %} <span class="you">you</span>{% endif %}</td>
+                <td class="muted">{{ u.email or '—' }}</td>
+                <td class="muted nowrap">{{ u.created_at[:10] if u.created_at else '—' }}</td>
+                <td class="row-actions">
+                  {% if not u.is_admin %}
+                  <button type="button" onclick="toggleRow('promote-{{ u.id }}')">Make admin…</button>
+                  {% elif u.id != pilot_id %}
+                  <button type="button" onclick="toggleRow('demote-{{ u.id }}')">Remove admin…</button>
+                  {% endif %}
+                  {% if u.id != pilot_id %}
+                  <form method="post" action="/admin/users/delete/{{ u.id }}" onsubmit="return confirm('Delete {{ u.username }}\'s account and all their flight data? This cannot be undone.');">
+                    <button type="submit" class="danger">Delete</button>
+                  </form>
+                  {% endif %}
+                </td>
+              </tr>
+              {% if not u.is_admin %}
+              <tr class="confirm-row" id="promote-{{ u.id }}">
+                <td colspan="4">
+                  <p class="warn">An admin can see and delete every account on this install,
+                    including yours, and can promote anyone else. Confirm with
+                    <strong>your own</strong> password.</p>
+                  <form method="post" action="/admin/users/promote/{{ u.id }}">
+                    <label class="sr-only" for="pw-{{ u.id }}">Your password</label>
+                    <input type="password" id="pw-{{ u.id }}" name="password" placeholder="Your password" autocomplete="current-password" required>
+                    <div class="btnrow">
+                      <button type="submit" class="primary">Make {{ u.username }} an admin</button>
+                      <button type="button" onclick="toggleRow('promote-{{ u.id }}')">Cancel</button>
+                    </div>
+                  </form>
+                </td>
+              </tr>
+              {% elif u.id != pilot_id %}
+              <tr class="confirm-row" id="demote-{{ u.id }}">
+                <td colspan="4">
+                  <form method="post" action="/admin/users/demote/{{ u.id }}">
+                    <label class="sr-only" for="dpw-{{ u.id }}">Your password</label>
+                    <input type="password" id="dpw-{{ u.id }}" name="password" placeholder="Your password" autocomplete="current-password" required>
+                    <div class="btnrow">
+                      <button type="submit">Remove admin from {{ u.username }}</button>
+                      <button type="button" onclick="toggleRow('demote-{{ u.id }}')">Cancel</button>
+                    </div>
+                  </form>
+                </td>
+              </tr>
+              {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p class="hint">
+          To add someone, send them this server's <a href="/register">/register</a> page.
+          They create their own account, then you promote them here. Only the first
+          account ever created is an admin automatically. <strong>The last remaining admin
+          cannot be removed or deleted</strong> — an install with flight data and nobody
+          able to administer it has no way back short of editing SQLite by hand.
+        </p>
+      </div>
+    </details>
   </div>
 
-  <h2 id="log">Decision log</h2>
-  <div class="card">
+  <div class="seclabel" id="test">Test mode</div>
+  <div class="glist">
+    <details class="grow" {% if sim_rows %}open{% endif %}>
+      {{ rowhead('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5c1.6 0 2.6 1.6 2.6 3.6v2.3l6 3.4v2.1l-6-1.8v3.6l2.1 1.5v1.6L12 18.9l-2.7 1.7v-1.6l2.1-1.5v-3.6l-6 1.8v-2.1l6-3.4V7.1c0-2 1-3.6 2.6-3.6z"/></svg>'|safe, 'Rehearse a flight', ('Running — ' ~ sim_rows|length ~ ' leg' ~ ('' if sim_rows|length == 1 else 's')) if sim_rows else 'Not running') }}
+      <div class="grow-body">
+        {% if sim_rows %}
+        <p class="hint">A rehearsal is running. These legs are <strong>invented</strong> — no AeroAPI
+          query can be spent on them, no ADS-B request is made for them, and they are
+          excluded from any logbook. They appear on Flights and the tracker exactly as a
+          real leg would, which is the point.</p>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Leg</th><th>Phase</th><th>Closed</th><th></th></tr></thead>
+            <tbody>
+              {% for r in sim_rows %}
+              <tr>
+                <td><strong>{{ r.callsign }}</strong><span class="sub2">{{ r.scenario }}</span></td>
+                <td>{{ r.phase }}<span class="sub2">{% if r.airborne %}airborne seen{% endif %}{% if r.landed %} · landed seen{% endif %}{% if r.stopped_since %} · stopped{% endif %}</span></td>
+                <td>{% if r.closed %}<span class="ok">{{ r.closed_by }}</span>{% else %}open{% endif %}</td>
+                <td class="row-actions">
+                  <form method="post" action="/admin/test/age"><input type="hidden" name="leg_id" value="{{ r.id }}"><input type="hidden" name="minutes" value="30"><button type="submit">Age 30m</button></form>
+                  <form method="post" action="/admin/test/age"><input type="hidden" name="leg_id" value="{{ r.id }}"><input type="hidden" name="minutes" value="180"><button type="submit">Age 3h</button></form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p class="hint"><strong>Age</strong> shifts what the leg has RECORDED backwards, so a rule that
+          matures on a long clock fires now. Nothing is faked and no threshold is lowered:
+          after ageing 30 minutes the leg genuinely has been stopped for 30 minutes, and the
+          real closure rule decides on the real number. Use 30m for the long-stop route, 3h
+          for the backstop. The poller re-checks every 20 seconds, so give it a moment and reload.</p>
+        <form method="post" action="/admin/test/stop" onsubmit="return confirm('Delete all simulated legs?');" class="btnrow">
+          <button type="submit" class="danger">Stop &amp; delete simulated legs</button>
+        </form>
+        {% else %}
+        <p class="hint">Rehearse a flight without waiting for a real one and without spending a
+          single AeroAPI credit. Each scenario is named for the bug it reproduces. The
+          simulator produces <strong>position reports only</strong> — the app's own tracking,
+          tagging and closure code then runs on them unchanged, so what you see is what a
+          real flight would do.</p>
+        <form method="post" action="/admin/test/start" class="sim-start">
+          <label class="sr-only" for="scenario">Scenario</label>
+          <select id="scenario" name="scenario">
+            {% for sc in sim_scenarios %}
+            <option value="{{ sc.key }}">{{ sc.title }} — {{ sc.route }}{% if sc.legs > 1 %}, {{ sc.legs }} legs{% endif %} ({{ sc.block_min }} min)</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="primary">Start test flight</button>
+        </form>
+        <details class="inner">
+          <summary>What each scenario proves</summary>
+          <dl class="scenarios">
+            {% for sc in sim_scenarios %}<dt>{{ sc.title }}</dt><dd>{{ sc.description }}</dd>{% endfor %}
+          </dl>
+        </details>
+        {% endif %}
+      </div>
+    </details>
+  </div>
+
+  {#- LIVE TRACKING. The one section whose contents are FETCHED rather
+      than rendered with the page — building it probes every enabled ADS-B
+      feed through a 1.2-second throttle and fires an uncached lookup per
+      open leg, which is why this page used to take ten to thirty seconds
+      to open. See main.admin_diagnostics_panel.
+
+      OPEN BY DEFAULT and fetched on first open, so the common case (you
+      came here because tracking looks wrong) costs one request and the
+      other case (you came to promote someone) costs none. -#}
+  <div class="seclabel" id="diagnostics">Live tracking</div>
+  <div class="glist">
+    <details class="grow" id="diag-row" open>
+      {{ rowhead('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.5l2-5 3.5 10 2.5-6 1.8 3H21"/></svg>'|safe, 'Feeds & diagnostics', 'Checked on open') }}
+      <div class="grow-body">
+        <p class="hint">Read top to bottom. <strong>The first red line is the problem.</strong> Every
+          step of the live path is listed separately, because "no tracking" has half a dozen
+          causes that look identical from outside: the poller not running, the callsign never
+          resolving, the provider returning nothing, or the match logic refusing what it returned.</p>
+        <div id="diagpanel"><p class="diag-loading">Checking feeds… this takes a few seconds,
+          because each one is a real request and they have to be spaced out.</p></div>
+      </div>
+    </details>
+  </div>
+
+  <div class="seclabel" id="log">Decision log</div>
+  <div class="glist">
+    <details class="grow">
+      {{ rowhead('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3.5h14v17H5z"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4"/></svg>'|safe, 'Why a leg decided what it decided', (log_events|length ~ ' lines') if log_enabled else 'Off') }}
+      <div class="grow-body">
     {% if not log_enabled %}
     <p class="hint">Off. Set <code>PT_DEBUG_LOG=1</code> in <code>docker-compose.yml</code> and
       restart to record decisions. It logs what the app DECIDED and why — every threshold
@@ -385,11 +593,57 @@
       });
     </script>
     {% endif %}
+      </div>
+    </details>
   </div>
 
-  <div style="text-align:center; color:var(--muted); font-size:0.75rem; margin-top:2rem;">v{{ version }}</div>
+  <div style="text-align:center; color:var(--muted); font-size:0.72rem; margin-top:1.75rem;">v{{ version }}</div>
   <script>
     function toggleRow(id) { var el = document.getElementById(id); if (el) el.classList.toggle('open'); }
+
+    // THE DIAGNOSTICS PANEL IS FETCHED, NOT RENDERED WITH THE PAGE.
+    //
+    // Building it makes real outbound requests — a probe per enabled feed
+    // through the shared 1.2s throttle, plus an uncached lookup per open
+    // leg — which is why this page used to hang for ten to thirty seconds
+    // before drawing anything at all. People, Test mode, Inbox and the log
+    // are database reads and are instant; they were being held hostage by
+    // the one section that talks to the internet.
+    //
+    // Fetched ONCE, on first open. Re-opening the row does not re-probe:
+    // hammering the feeds by tapping a disclosure triangle is exactly the
+    // behaviour that got the old probe rate-limited and made it report
+    // every feed dead (1.8.0).
+    (function () {
+      var row = document.getElementById('diag-row');
+      var panel = document.getElementById('diagpanel');
+      if (!row || !panel) { return; }
+      var loaded = false;
+      function load() {
+        if (loaded) { return; }
+        loaded = true;
+        fetch('/admin/diagnostics/panel', { credentials: 'same-origin' })
+          .then(function (r) {
+            if (!r.ok) { throw new Error('HTTP ' + r.status); }
+            return r.text();
+          })
+          .then(function (html) { panel.innerHTML = html; })
+          .catch(function (e) {
+            // Say so rather than leaving a spinner forever. This panel is
+            // what you read when something is already broken, and a
+            // permanently "loading" diagnostics section is the least
+            // useful possible answer. Invariant 23.
+            loaded = false;
+            panel.innerHTML = '<p class="alert">Could not load diagnostics (' +
+              String(e.message || e) + '). <button type="button" id="diag-retry">Try again</button></p>';
+            var b = document.getElementById('diag-retry');
+            if (b) { b.addEventListener('click', function () { panel.innerHTML =
+              '<p class="diag-loading">Checking feeds…</p>'; load(); }); }
+          });
+      }
+      if (row.open) { load(); }
+      row.addEventListener('toggle', function () { if (row.open) { load(); } });
+    })();
   </script>
   {% include "partials/tabbar.html" %}
 {% include "partials/sw_register.html" %}

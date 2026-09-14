@@ -163,3 +163,138 @@ def month_labels(months: Set[str]) -> str:
     if parsed[0].year == parsed[-1].year:
         return f"{parsed[0].strftime('%B')}–{parsed[-1].strftime('%B %Y')}"
     return f"{parsed[0].strftime('%B %Y')}–{parsed[-1].strftime('%B %Y')}"
+
+
+# ---------------------------------------------------------------------------
+# THE PLAN (1.30.0) — one timeline instead of four lists
+#
+# WHAT WAS WRONG WITH THE OLD REVIEW PAGE
+# ---------------------------------------
+# It showed the same flight TWICE, in two places, with two different
+# controls, and only one of them did anything.
+#
+# The top of the page had four read-only summaries — added, changed, no
+# longer on the line, already flown. The bottom had a COLLAPSED section
+# called "Trip breaks & full list", and that was the actual form: the
+# hidden fields that get imported, the X that drops a leg, and the trip
+# break markers all lived in there. So a pilot looking at a flight under
+# "Being added" and wanting to drop it had to know to open a collapsed
+# section, find the same flight a second time, and use a different
+# control on it. The one they were looking at was a picture.
+#
+# Two consequences beyond the confusion:
+#
+#   * TRIP BREAKS WERE INVISIBLE while reading the diff, which is the
+#     only moment their placement can be judged. They were shut inside
+#     the section nobody opened.
+#   * A RETIMED LEG COULD NOT BE DECLINED. The diff said "times changed",
+#     the pilot approved the import, and the new times were applied
+#     because the leg was in the paste. There was no way to say "no, keep
+#     what I have" short of editing the text before pasting it.
+#
+# WHAT THIS RETURNS
+# -----------------
+# ONE list, in departure order, holding every leg that this import has an
+# opinion about — from the paste and from the roster alike, interleaved,
+# so the month reads as a month rather than as four piles. Each row
+# carries its own state and its own default, and the template gives each
+# row exactly one control.
+#
+# The six states, and the default for each:
+#
+#   new         in the paste, not on your roster        -> import      ON
+#   retimed     on your roster, and the paste disagrees -> update      ON
+#   same        on your roster, paste agrees            -> (no control)
+#   flown       on your roster, already departed        -> (frozen)
+#   gone        upcoming, and the paste omits it        -> remove      ON
+#   gone_flown  already flown, and the paste omits it   -> remove     OFF
+#
+# THE TWO "GONE" DEFAULTS ARE OPPOSITE, AND THAT IS THE SAFETY MECHANISM,
+# not a style choice. It is the 1.20.0/1.21.0 rule, carried over intact.
+# `gone` is the paste CONTRADICTING a leg you have not flown yet, so it
+# leads with remove. `gone_flown` is the paste being SILENT about
+# history — which is the ordinary result of pasting a single trip — so it
+# leads with keep. Had flown legs ever defaulted to remove, importing one
+# trip would delete a month of history by default.
+#
+# `flown` legs in the paste are frozen for the 1.22.0 reason: a flown
+# leg is NEVER modified by an import, no exceptions. They appear on the
+# list anyway rather than being hidden, because a pilot counting his trip
+# needs to see them; they simply have nothing to decide.
+# ---------------------------------------------------------------------------
+
+NEW = "new"
+RETIMED = "retimed"
+SAME = "same"
+FLOWN = "flown"
+GONE = "gone"
+GONE_FLOWN = "gone_flown"
+
+# Which states the pilot can actually act on, and which way they lead.
+# Declared as data rather than as branches in the template, so the page
+# and the confirm step cannot come to disagree about what a row means.
+PLAN_DEFAULT_ON = {NEW: True, RETIMED: True, GONE: True, GONE_FLOWN: False}
+
+# The states the pilot can act on at all. `same` and `flown` are on the
+# list to be SEEN, not to be decided — a pilot counting his trip needs
+# them there, but there is nothing to switch. Kept as data so the
+# template, the summary and the page's JavaScript all ask one question
+# rather than each carrying their own list of state names.
+PLAN_ACTIONABLE = (NEW, RETIMED, GONE, GONE_FLOWN)
+
+
+def build_plan(pasted: List[FlightLeg], current: List[FlightLeg],
+               now: Optional[datetime] = None) -> List[Dict]:
+    """Every leg this import touches, in departure order, each with a state.
+
+    Built from `build_diff` rather than beside it: the categorisation
+    rules — what counts as changed, which months are in scope, what is
+    frozen — are subtle, already correct, and already tested. A second
+    implementation of them here is how the page and the merge come to
+    disagree, which is the exact failure 1.20.0 was spent on.
+    """
+    now = now or datetime.now(timezone.utc)
+    diff = build_diff(pasted, current, now)
+    paste_by_id = {flight_key(l.id): l for l in pasted}
+    current_by_id = {flight_key(l.id): l for l in current}
+
+    rows: List[Dict] = []
+
+    def add(leg, state, was=None):
+        rows.append({"leg": leg, "state": state, "was": was,
+                     "id": flight_key(leg.id),
+                     "in_paste": flight_key(leg.id) in paste_by_id,
+                     "default_on": PLAN_DEFAULT_ON.get(state, False)})
+
+    for e in diff[ADDED]:
+        add(e["leg"], NEW)
+    for e in diff[CHANGED]:
+        add(e["leg"], RETIMED, was=e.get("was"))
+    for e in diff[UNCHANGED]:
+        # build_diff folds two different things into UNCHANGED: a leg the
+        # paste genuinely matches, and a FLOWN leg the paste restates
+        # (which it declines to call "changed", because nothing about a
+        # flown leg is editable). They read differently to a pilot — one
+        # is "nothing to do", the other is "this already happened" — so
+        # they are separated again here, using the roster's copy, which
+        # is the one with the real departure time on it.
+        have = current_by_id.get(flight_key(e["leg"].id))
+        add(e["leg"], FLOWN if (have is not None and _departed(have, now))
+            else SAME)
+    for e in diff[REMOVED]:
+        add(e["leg"], GONE_FLOWN if e.get("flown") else GONE)
+
+    # DEPARTURE ORDER, because that is the order he flies them and the
+    # only order in which a trip break means anything. Four separate
+    # lists could never show that a removed leg sits in the MIDDLE of a
+    # trip you are keeping, which is precisely the case worth seeing.
+    rows.sort(key=lambda r: (r["leg"].date, r["leg"].dep_time_local))
+    return rows
+
+
+def plan_summary(rows: List[Dict]) -> Dict[str, int]:
+    """How many rows in each state, for the count at the top of the page."""
+    out = {s: 0 for s in (NEW, RETIMED, SAME, FLOWN, GONE, GONE_FLOWN)}
+    for r in rows:
+        out[r["state"]] = out.get(r["state"], 0) + 1
+    return out

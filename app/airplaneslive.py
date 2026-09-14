@@ -377,9 +377,38 @@ def probe(base: str, callsign: str = "AAL100", api_key: str = ""):
         return r.status_code, None, f"not JSON: {e}"
     if not isinstance(data, dict):
         return r.status_code, None, "unexpected shape (not an object)"
-    ac = data.get("ac") or data.get("aircraft")
+    # `is None`, NOT `or` (fixed 1.30.0). THE BUG: this read
+    #
+    #     ac = data.get("ac") or data.get("aircraft")
+    #
+    # and an EMPTY LIST is falsy, so a perfectly healthy feed answering
+    # "nobody is flying that callsign right now" fell through to
+    # data.get("aircraft"), got None, and was reported as
+    # "HTTP 200 — no 'ac' list, different API format", in red, as a
+    # broken feed.
+    #
+    # It fires constantly, because the probe callsign is AAL100 — ONE
+    # daily transatlantic flight, so for most of any given day there is
+    # genuinely no aircraft under it and the correct answer is an empty
+    # list. That is the "HTTP 200 errors" seen on the admin page.
+    #
+    # It was also inconsistent in a way that made it harder to recognise:
+    # a feed keying its empty list under `aircraft` PASSED, because
+    # `None or []` is `[]`, while the identical answer under `ac` failed.
+    # Same emptiness, two verdicts, depending on a key name.
+    #
+    # Worse than cosmetic: this feeds the `working` count, so enough
+    # quiet feeds produced "No enabled feed is answering" — a red alarm
+    # about an app that was tracking flights perfectly well. The
+    # diagnostics being the broken thing is invariant 23.
+    ac = data.get("ac")
     if ac is None:
-        return r.status_code, None, "no 'ac' list — different API format"
+        ac = data.get("aircraft")
+    if ac is None:
+        keys = ", ".join(sorted(data.keys())[:6]) or "(no keys)"
+        return r.status_code, None, f"no 'ac' or 'aircraft' list — keys were: {keys}"
+    if not isinstance(ac, list):
+        return r.status_code, None, "'ac' was not a list"
     return r.status_code, len(ac), "ok"
 
 

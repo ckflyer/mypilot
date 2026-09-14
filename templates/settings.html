@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.29.2 -->
+<!-- BUILT_FOR 1.30.0 -->
 <html lang="en" data-theme="{{ s.theme }}" data-accent="{{ s.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -61,6 +61,26 @@
     }
     .field-pair { display: flex; gap: 0.75rem; flex-wrap: wrap; }
     .field-pair > div { flex: 1 1 150px; }
+
+    /* The report form. ONE form for bugs AND ideas, with a kind picker —
+       not two forms, and not two rows in the list. Splitting them would
+       make the reporter classify their own problem before describing it,
+       and the commonest report ("this looks wrong, is that a bug or am I
+       being thick?") does not classify cleanly. A dropdown they can leave
+       alone is the whole of the distinction that is actually needed. */
+    textarea {
+      width: 100%; padding: 0.6rem 0.7rem; margin-bottom: 0.8rem;
+      background: var(--input-bg); border: 1px solid var(--border);
+      border-radius: 9px; color: var(--text); font-size: 0.95rem;
+      font-family: inherit; line-height: 1.5; resize: vertical;
+      min-height: 6.5rem;
+    }
+    textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    select.fb-select {
+      width: 100%; padding: 0.6rem 0.7rem;
+      background: var(--input-bg); border: 1px solid var(--border);
+      border-radius: 9px; color: var(--text); font-size: 0.95rem;
+    }
     .hint { font-size: 0.78rem; color: var(--muted); margin: -0.45rem 0 0.85rem; line-height: 1.45; }
     .ctl { margin-bottom: 0.9rem; }
     .ctl:last-child { margin-bottom: 0; }
@@ -159,6 +179,53 @@
       <span class="grow-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 5 16 12 9 19"/></svg></span>
     </summary>
   {% endmacro %}
+
+  {#- REPORT A PROBLEM (1.30.0).
+
+      OUTSIDE the preferences form above, deliberately — it is its own
+      form with its own action, for the same reason the account and
+      password forms are separate. Sharing a submit would mean every
+      theme change also re-sent a bug report, and a failed send would
+      discard the theme change.
+
+      SHOWN TO VIEWERS TOO, and that is the whole point of putting it
+      here rather than on /admin. The people most likely to find a bug in
+      this app are the family members using it, and until now they had no
+      way to say so except mentioning it in conversation — which is
+      literally how the last viewer-facing bug was found.
+
+      The build and the device are NOT collected in hidden fields. The
+      server reads its own VERSION and the browser's User-Agent header on
+      the way in, because a page served from a stale cache would report a
+      stale version, and the stale-cache case is exactly when the version
+      matters. -#}
+  <div class="seclabel">Help</div>
+  <div class="glist">
+    <details class="grow" {% if open_group == 'feedback' %}open{% endif %}>
+      {{ rowhead('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16v11H13l-4.5 3.5v-3.5H4z"/><path d="M12 8.4v3.4"/><circle cx="12" cy="14.1" r="0.6" fill="currentColor" stroke="none"/></svg>'|safe, 'Report a problem', 'Bug or idea') }}
+      <div class="grow-body">
+        <form method="post" action="/feedback">
+          <input type="hidden" name="page" value="/settings">
+          <div class="ctl">
+            <label for="fb-kind">What is this?</label>
+            <select id="fb-kind" name="kind" class="fb-select">
+              {% for key, label in feedback_kinds.items() %}
+              <option value="{{ key }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <label for="fb-message">What happened?</label>
+          <textarea id="fb-message" name="message" rows="5" required
+                    placeholder="What you were doing, what you expected, and what happened instead."></textarea>
+          <p class="hint">Your name, the page you came from, this app's version
+            and your device are attached automatically — those are usually what
+            is needed to work out what went wrong.</p>
+          <button type="submit" class="primary">Send report</button>
+        </form>
+      </div>
+    </details>
+  </div>
+
 
   {% if is_pilot %}
   <div class="seclabel">Account</div>

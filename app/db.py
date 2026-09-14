@@ -276,6 +276,13 @@ def _create_flights(conn) -> None:
     from . import reserve as _reserve
     _reserve.ensure_table(conn)
 
+    # Bug reports and feedback (1.30.0). Its own table for the reason
+    # recorded at the top of feedback.py: a column on `users` holds one
+    # value, and the one thing a bug inbox must never do is lose a report
+    # because a second one arrived.
+    from . import feedback as _feedback
+    _feedback.ensure_table(conn)
+
 
 def _sync_flight_columns(conn) -> None:
     """Add any column in FLIGHT_COLUMNS that the table doesn't have yet.

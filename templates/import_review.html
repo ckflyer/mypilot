@@ -1,5 +1,43 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.29.2 -->
+<!-- BUILT_FOR 1.30.0 -->
+{#- THE IMPORT REVIEW, rebuilt 1.30.0.
+
+    ONE LIST. That is the whole change, and it is worth recording why the
+    old page had four.
+
+    Before this, the top of the page held four read-only summaries
+    (added / times changed / no longer on the line / already flown) and
+    the bottom held a COLLAPSED section called "Trip breaks & full list".
+    That collapsed section was the actual form — the hidden fields that
+    get imported, the X that drops a leg, the trip breaks, all of it. So
+    every flight appeared TWICE, and the copy the pilot was looking at
+    was a picture. Wanting to drop a flight shown under "Being added"
+    meant knowing to open a section at the bottom, finding the same
+    flight a second time, and using a different control on it.
+
+    Now every flight appears exactly once, in departure order, with a
+    badge saying what will happen to it and one button to change that.
+    Trip breaks sit in the same list, between the flights they separate,
+    with the rest gap printed beside them — because "should a trip start
+    here" is a question about how long he is home for, and the old page
+    asked for that judgement while showing only flight times.
+
+    THREE THINGS DELIBERATELY KEPT FROM THE OLD PAGE:
+
+    1. A row switched off STAYS ON THE PAGE, struck through. Removing it
+       would leave the pilot unable to tell "I turned that off" from
+       "the parser never saw it", which is the ambiguity this page exists
+       to remove.
+    2. The OPPOSITE DEFAULTS on the two kinds of removal. An upcoming leg
+       the paste omits leads with REMOVE, because the paste contradicts
+       it. A flown leg the paste omits leads with KEEP, because the paste
+       is merely silent — which is the normal result of pasting a single
+       trip. Reversing the second would delete a month of history every
+       time somebody imported one trip. See app/importer.py.
+    3. Colour is never the only signal. Every row says its state in words
+       as well, because "the green ones are new" is useless on a phone in
+       sunlight and worse to anyone who cannot separate the two greens.
+-#}
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -12,294 +50,212 @@
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: var(--bg); color: var(--text); min-height: 100vh;
-      padding: max(1.5rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right)) max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
+      padding: max(1.25rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) calc(6rem + env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
       max-width: 640px; margin: 0 auto;
     }
-    .brand { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.35rem; }
-    h1 { font-size: 1.3rem; margin-bottom: 0.35rem; }
-    .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.25rem; line-height: 1.5; }
+    .brand { font-size: 0.95rem; font-weight: 700; margin: 0 0 0.35rem 0.25rem; }
+    h1 { font-size: 1.6rem; letter-spacing: -0.02em; margin: 0 0 0.25rem 0.25rem; }
+    .sub { color: var(--muted); font-size: 0.85rem; line-height: 1.5; margin: 0 0 1rem 0.25rem; }
+    .sr-only-cb {
+      position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+      overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+    }
 
-    .leg-item { background: var(--card); border-radius: 12px; padding: 0.85rem 1rem; margin-bottom: 0.5rem; }
-    .leg-row { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
-    .leg-row .meta { color: var(--muted); font-size: 0.8rem; margin-top: 0.2rem; }
+    /* ---- the summary bar.
+       Counts the DECISIONS, and recounts live as rows are switched. A
+       static count taken at render time would start disagreeing with the
+       page the moment anything was toggled, and this is the number the
+       Import button acts on. */
+    .plan-sum {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 0.85rem 1rem; margin-bottom: 1rem;
+      display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem;
+    }
+    .plan-sum .s { font-size: 0.85rem; color: var(--muted); }
+    .plan-sum .s b { color: var(--text); font-variant-numeric: tabular-nums; }
+    .plan-sum .s.zero { display: none; }
+    .flown-bulk {
+      flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 0.4rem;
+      align-items: center; font-size: 0.78rem; color: var(--muted);
+      border-top: 1px solid var(--border); padding-top: 0.55rem;
+    }
+    .flown-bulk .fb-lbl { flex: 1 1 auto; min-width: 10rem; line-height: 1.45; }
+    .flown-bulk button {
+      font: inherit; font-size: 0.75rem; padding: 0.3rem 0.65rem;
+      min-height: 32px; border-radius: 999px;
+      border: 1px solid var(--border); background: var(--input-bg);
+      color: var(--text); cursor: pointer;
+    }
+    .plan-scope {
+      flex: 1 1 100%; font-size: 0.78rem; color: var(--muted);
+      border-top: 1px solid var(--border); padding-top: 0.55rem; line-height: 1.5;
+    }
+
+    /* ---- day heading. Sticky, small caps, on the page's own colour, so
+       a sixty-row month never leaves you asking which day you are in.
+       Same job and same reasoning as the tracker's (1.16.0). */
+    .day-head {
+      position: sticky; top: 0; z-index: 2;
+      background: var(--bg); padding: 0.85rem 0.25rem 0.35rem;
+      font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--muted);
+    }
+
+    /* ---- a flight row ------------------------------------------------ */
+    .prow {
+      display: grid; grid-template-columns: auto 1fr auto;
+      align-items: start; gap: 0.35rem 0.7rem;
+      background: var(--card); border: 1px solid var(--border);
+      border-left-width: 3px; border-radius: 12px;
+      padding: 0.7rem 0.8rem; margin-bottom: 0.4rem;
+    }
+    .prow .tog {
+      grid-row: 1; align-self: center;
+      width: 34px; height: 34px; flex-shrink: 0;
+      border-radius: 9px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted);
+      font-size: 1.05rem; line-height: 1; cursor: pointer;
+    }
+    .prow .tog:hover { color: var(--text); border-color: var(--muted); }
+    .prow .body { min-width: 0; }
+    .prow .ttl { font-size: 0.95rem; font-weight: 600; }
+    .prow .ttl .rt { font-weight: 400; color: var(--muted); }
+    .prow .meta { color: var(--muted); font-size: 0.8rem; margin-top: 0.15rem; }
+    .prow .was { color: var(--muted); font-size: 0.78rem; margin-top: 0.25rem; line-height: 1.45; }
+    .prow .was s { opacity: 0.75; }
+    .prow .badge {
+      align-self: center; font-size: 0.68rem; font-weight: 700;
+      letter-spacing: 0.04em; text-transform: uppercase;
+      padding: 0.2rem 0.45rem; border-radius: 999px; white-space: nowrap;
+    }
     .dh {
       display: inline-block; padding: 0.1rem 0.4rem; border-radius: 6px;
       font-size: 0.65rem; font-weight: 600; background: rgba(245,158,11,0.2);
-      color: var(--warn); margin-left: 0.35rem; vertical-align: middle;
+      color: var(--warn); margin-left: 0.3rem; vertical-align: middle;
     }
-    .add-break-btn {
-      flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
-      background: transparent; border: 1px solid var(--border); color: var(--muted);
-      font-size: 1.1rem; line-height: 1; cursor: pointer;
-    }
-    .add-break-btn:hover { color: var(--text); border-color: var(--muted); }
 
-    .break-marker {
-      display: flex; align-items: center; gap: 0.6rem;
-      background: rgba(59,130,246,0.1);
-      border: 1px dashed var(--accent);
-      border-radius: 10px;
-      padding: 0.55rem 0.7rem;
-      margin: 0.6rem 0;
-      font-size: 0.85rem;
-      color: var(--accent);
-      cursor: default;
+    .prow.new       { border-left-color: var(--good); }
+    .prow.new     .badge { background: rgba(34,197,94,0.16); color: var(--good); }
+    .prow.retimed   { border-left-color: var(--warn); }
+    .prow.retimed .badge { background: rgba(245,158,11,0.18); color: var(--warn); }
+    .prow.gone      { border-left-color: var(--bad); }
+    .prow.gone    .badge { background: rgba(239,68,68,0.15); color: var(--bad); }
+    .prow.same      { border-left-color: var(--border); opacity: 0.7; }
+    .prow.same    .badge { color: var(--muted); }
+    .prow.flown     { border-left-color: var(--border); opacity: 0.7; }
+    .prow.flown   .badge { color: var(--muted); }
+    /* Deliberately NOT the danger colour — the 1.20.0 rule. Nothing in
+       this state happens unless the pilot turns it on, and painting it
+       red would make the ordinary case (pasting one trip, which says
+       nothing about the rest of the month) look like a threat. */
+    .prow.gone_flown       { border-left-color: var(--muted); }
+    .prow.gone_flown .badge { color: var(--muted); }
+
+    /* A row switched AWAY FROM ITS DEFAULT. Struck through, dimmed, and
+       still on the page. */
+    .prow.off { opacity: 0.5; }
+    .prow.off .ttl, .prow.off .meta { text-decoration: line-through; }
+    .prow.off .tog { color: var(--accent); border-color: var(--accent); }
+
+    /* ---- trip break -------------------------------------------------- */
+    .brk {
+      display: flex; align-items: center; gap: 0.55rem;
+      border: 1px dashed var(--accent); border-radius: 10px;
+      padding: 0.5rem 0.65rem; margin: 0.5rem 0;
+      font-size: 0.84rem; color: var(--accent);
     }
-    .drag-handle { cursor: grab; color: var(--accent); flex-shrink: 0; display: flex; }
+    .drag-handle { cursor: grab; flex-shrink: 0; display: flex; }
     .drag-handle:active { cursor: grabbing; }
-    .break-label { flex: 1; font-weight: 600; }
-    .break-delete {
+    .brk .lbl { flex: 1; font-weight: 600; }
+    .brk .rest { font-weight: 400; opacity: 0.85; font-variant-numeric: tabular-nums; }
+    .brk .x {
       flex-shrink: 0; width: 26px; height: 26px; border-radius: 6px;
-      background: transparent; border: none; color: var(--accent);
-      font-size: 1.1rem; line-height: 1; cursor: pointer;
+      background: none; border: none; color: var(--accent);
+      font-size: 1.05rem; line-height: 1; cursor: pointer;
     }
-    .break-delete:hover { background: rgba(59,130,246,0.15); }
-    .break-marker.sortable-ghost { opacity: 0.4; }
+    .brk.sortable-ghost { opacity: 0.4; }
+    /* The rest gap printed on a row that has NO break, so the pilot can
+       see where one might belong without adding it to find out. */
+    .gap-note {
+      font-size: 0.72rem; color: var(--muted);
+      margin: 0.35rem 0 0.35rem 0.3rem; font-variant-numeric: tabular-nums;
+    }
+    .add-brk {
+      background: none; border: none; color: var(--accent);
+      font: inherit; font-size: 0.72rem; cursor: pointer;
+      padding: 0 0.2rem; text-decoration: underline;
+    }
 
-    .actions { display: flex; gap: 0.6rem; margin-top: 1.5rem; }
+    /* ---- the action bar. FIXED, because this list is a month long and a
+       button below sixty rows is a button nobody reaches by accident. */
+    .actions {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+      display: flex; gap: 0.6rem; justify-content: center;
+      padding: 0.7rem max(1rem, env(safe-area-inset-right)) calc(0.7rem + env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+      background: var(--bg); border-top: 1px solid var(--border);
+    }
     .actions a, .actions button {
-      flex: 1; text-align: center; padding: 0.75rem; border-radius: 8px;
-      font-weight: 600; font-size: 0.95rem; cursor: pointer; text-decoration: none; border: none;
+      flex: 1 1 0; max-width: 260px; text-align: center; padding: 0.8rem;
+      border-radius: 10px; font-weight: 600; font-size: 0.95rem;
+      cursor: pointer; text-decoration: none; border: 1px solid transparent;
     }
-    .btn-cancel { background: transparent; border: 1px solid var(--border) !important; color: var(--text); }
-    .btn-confirm { background: var(--accent); color: white; }
-    /* ---- the import diff (N1, 1.5.0) ----------------------------------
-       Colour is NOT the only signal. Each section has a heading in words
-       and each row a sign character, because "the green ones are new" is
-       useless to anyone reading this on a phone in sunlight, and worse to
-       anyone who cannot distinguish the two greens. */
-    .diff-sec { margin-bottom: 1.1rem; }
-    .diff-head {
-      display: flex; align-items: baseline; gap: 0.4rem;
-      font-size: 0.9rem; font-weight: 700; margin-bottom: 0.4rem;
-    }
-    .diff-head .n { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
-    .diff-row {
-      display: flex; gap: 0.6rem; align-items: flex-start;
-      background: var(--card); border-radius: 10px;
-      padding: 0.6rem 0.75rem; margin-bottom: 0.35rem;
-      border-left: 3px solid var(--border);
-    }
-    .diff-row .sign { font-weight: 700; flex-shrink: 0; width: 1ch; }
-    .diff-row .body { flex: 1; min-width: 0; }
-    .diff-row .meta { color: var(--muted); font-size: 0.78rem; margin-top: 0.15rem; }
-    .diff-row .was { color: var(--muted); font-size: 0.78rem; margin-top: 0.15rem; }
-    .diff-row .was s { opacity: 0.75; }
-    .sec-added .diff-row { border-left-color: var(--ok, #22c55e); }
-    .sec-added .sign { color: var(--ok, #22c55e); }
-    .sec-changed .diff-row { border-left-color: var(--warn, #f59e0b); }
-    .sec-changed .sign { color: var(--warn, #f59e0b); }
-    .sec-removed .diff-row { border-left-color: var(--danger, #ef4444); }
-    .sec-removed .sign { color: var(--danger, #ef4444); }
-    /* Deliberately NOT the danger colour. Nothing in this section happens
-       unless the pilot ticks it, and painting it red would make the
-       ordinary case — pasting one trip, which says nothing about the rest
-       of the month — look like a threat every single time. */
-    .sec-flown .diff-row { border-left-color: var(--muted); }
-    .sec-flown .diff-head { color: var(--muted); }
-    .flown-actions { display: flex; align-items: center; gap: 0.5rem; margin: 0.15rem 0 0.6rem; }
-    .flown-actions button {
-      font: inherit; font-size: 0.78rem; padding: 0.3rem 0.65rem;
-      border-radius: 999px; border: 1px solid var(--border);
-      background: var(--input-bg); color: var(--text); cursor: pointer;
-      min-height: 32px;
-    }
-    .flown-count { font-size: 0.78rem; color: var(--muted); }
-    .flown-item { display: flex; align-items: flex-start; gap: 0.5rem; }
-    .flown-item .body { flex: 1 1 auto; min-width: 0; }
-    /* The checkbox stays in the tab order and on the accessibility tree —
-       display:none would remove it from both and leave the X, which is a
-       <button> with no state, as the only way in. */
-    .flown-check {
-      position: absolute; width: 1px; height: 1px;
-      margin: -1px; padding: 0; overflow: hidden;
-      clip: rect(0 0 0 0); white-space: nowrap; border: 0;
-    }
-    .flown-x {
-      flex: 0 0 auto; width: 30px; height: 30px; line-height: 1;
-      border-radius: 8px; border: 1px solid var(--border);
-      background: none; color: var(--muted); font-size: 1.05rem;
-      cursor: pointer;
-    }
-    /* Marked rows are struck through and stay ON THE PAGE, same as a
-       dropped leg above: "I marked that" must not look like "the parser
-       missed it". */
-    .flown-item.marked { opacity: 0.55; }
-    .flown-item.marked strong, .flown-item.marked .meta { text-decoration: line-through; }
-    .flown-item.marked .flown-x {
-      color: var(--danger, #ef4444); border-color: var(--danger, #ef4444);
-    }
-    .diff-row label { display: flex; gap: 0.55rem; align-items: flex-start; cursor: pointer; width: 100%; }
-    .diff-row input[type="checkbox"] { margin-top: 0.2rem; flex-shrink: 0; width: 18px; height: 18px; }
-    .scope {
-      background: var(--card); border: 1px solid var(--border);
-      border-radius: 10px; padding: 0.7rem 0.85rem; margin-bottom: 1rem;
-      font-size: 0.85rem; line-height: 1.5;
-    }
-    .scope strong { color: var(--text); }
-    .nothing { color: var(--muted); font-size: 0.85rem; }
-    .leg-tools { display: flex; gap: 0.35rem; flex-shrink: 0; }
-    .drop-leg-btn {
-      width: 30px; height: 30px; border-radius: 8px;
-      background: transparent; border: 1px solid var(--border);
-      color: var(--muted); font-size: 1.1rem; line-height: 1; cursor: pointer;
-    }
-    .drop-leg-btn:hover { color: var(--danger, #ef4444); border-color: var(--danger, #ef4444); }
-    /* A dropped leg stays ON THE PAGE, greyed and struck through, rather
-       than disappearing. Removing the row outright would leave the pilot
-       unable to tell "I dropped that" from "the parser never saw it",
-       which is exactly the ambiguity this whole page exists to remove. */
-    .leg-item.dropped { opacity: 0.5; }
-    .leg-item.dropped strong, .leg-item.dropped .meta { text-decoration: line-through; }
-    .leg-item.dropped .drop-leg-btn { color: var(--accent); border-color: var(--accent); text-decoration: none; }
-    details.legs > summary {
-      cursor: pointer; font-size: 0.9rem; font-weight: 700;
-      margin-bottom: 0.5rem; padding: 0.3rem 0;
-    }
-
+    .btn-cancel { background: transparent; border-color: var(--border); color: var(--text); }
+    .btn-confirm { background: var(--accent-fill); color: #fff; }
+    .nothing { color: var(--muted); font-size: 0.85rem; padding: 0 0.25rem; }
+    .helpnote { font-size: 0.78rem; color: var(--muted); line-height: 1.55; margin: 1.1rem 0.25rem 0; }
   </style>
 </head>
 <body>
   <div class="brand">MyPilot</div>
-  <h1>Review before importing</h1>
-  <p class="sub">
-    This paste covers <strong>{{ scope_label }}</strong>. Nothing is saved until you confirm,
-    and nothing outside those months is touched.
-    <strong>Flights you have already flown are never removed by an import.</strong>
-  </p>
+  <h1>Review import</h1>
+  <p class="sub">Nothing is saved until you press Import. Tap the button on any
+    flight to change what happens to it.</p>
 
   <form method="post" action="/flights/import/confirm" id="review-form">
 
-    {% if added %}
-    <div class="diff-sec sec-added">
-      <div class="diff-head">Being added <span class="n">{{ added|length }}</span></div>
-      {% for r in added %}
-      <div class="diff-row">
-        <span class="sign" aria-hidden="true">+</span>
-        <div class="body">
-          <strong>{{ r.callsign }}</strong>{% if r.is_deadhead %}<span class="dh">DH</span>{% endif %} {{ r.route }}
-          <div class="meta">{{ r.date_label }} · {{ r.dep }} – {{ r.arr }}{% if r.same_zone and r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}</span>{% elif r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}/{{ r.arr_zone }}</span>{% endif %}</div>
-        </div>
-      </div>
-      {% endfor %}
+    <div class="plan-sum">
+      <span class="s" data-count="new"><b>0</b> adding</span>
+      <span class="s" data-count="retimed"><b>0</b> retiming</span>
+      <span class="s" data-count="removing"><b>0</b> removing</span>
+      <span class="s" data-count="keeping"><b>0</b> left alone</span>
+      {#- BULK CONTROLS FOR THE ALREADY-FLOWN REMOVALS (kept from 1.21.0).
+
+          Only rendered when there ARE flown legs the paste omits, because
+          a control that does nothing on most imports is clutter on most
+          imports. The running count stays, in the summary above, which is
+          where it now belongs — it counts every decision on the page
+          rather than just these.
+
+          Still nothing pre-selected: these buttons are how a pilot says
+          "I flew none of that trip" in one tap, not a default. -#}
+      {% if counts.gone_flown %}
+      <span class="flown-bulk">
+        <span class="fb-lbl">{{ counts.gone_flown }} already-flown flight{{ "s" if counts.gone_flown != 1 }} not in this paste:</span>
+        <button type="button" data-flown-all>Remove all</button>
+        <button type="button" data-flown-none>Keep all</button>
+      </span>
+      {% endif %}
+      <span class="plan-scope">
+        This paste covers <strong>{{ scope_label }}</strong> and holds
+        {{ paste_count }} flight{{ "s" if paste_count != 1 }}. Nothing outside
+        those months is touched, and a flight you have already flown can never
+        have its times changed by an import.
+      </span>
     </div>
+
+    {% if not rows %}
+    <p class="nothing">Nothing to review — this paste is empty.</p>
     {% endif %}
 
-    {% if changed %}
-    <div class="diff-sec sec-changed">
-      <div class="diff-head">Times changed <span class="n">{{ changed|length }}</span></div>
-      {% for r in changed %}
-      <div class="diff-row">
-        <span class="sign" aria-hidden="true">~</span>
-        <div class="body">
-          <strong>{{ r.callsign }}</strong>{% if r.is_deadhead %}<span class="dh">DH</span>{% endif %} {{ r.route }}
-          <div class="meta">{{ r.date_label }} · {{ r.dep }} – {{ r.arr }}{% if r.same_zone and r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}</span>{% elif r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}/{{ r.arr_zone }}</span>{% endif %}</div>
-          {% if r.was %}<div class="was">was <s>{{ r.was.dep }} – {{ r.was.arr }}</s>{% if r.was.is_deadhead != r.is_deadhead %} · {% if r.is_deadhead %}now a deadhead{% else %}no longer a deadhead{% endif %}{% endif %}</div>{% endif %}
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-    {% endif %}
+    <div id="plan-list">
+      {% for r in rows %}
 
-    {% if removed %}
-    <div class="diff-sec sec-removed">
-      <div class="diff-head">No longer on the line <span class="n">{{ removed|length }}</span></div>
-      <p class="sub" style="margin-bottom:0.5rem">
-        These are upcoming {{ scope_label }} flights you already have that this paste
-        does not mention. Untick anything you want to keep.
-      </p>
-      {% for r in removed %}
-      <div class="diff-row">
-        <label>
-          <input type="checkbox" name="remove_id" value="{{ r.id }}" checked>
-          <span class="body">
-            <strong>{{ r.callsign }}</strong>{% if r.is_deadhead %}<span class="dh">DH</span>{% endif %} {{ r.route }}
-            <span class="meta" style="display:block">{{ r.date_label }} · {{ r.dep }} – {{ r.arr }}{% if r.same_zone and r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}</span>{% elif r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}/{{ r.arr_zone }}</span>{% endif %}</span>
-          </span>
-        </label>
-        <input type="hidden" name="removable_id" value="{{ r.id }}">
-      </div>
-      {% endfor %}
-    </div>
-    {% endif %}
+        {% if r.new_day %}
+        <div class="day-head">{{ r.date_label }}</div>
+        {% endif %}
 
-    {% if removed_flown %}
-    {# FLOWN LEGS THIS PASTE DOES NOT MENTION (1.20.0, reworked 1.21.0).
-
-       The paste is the authority on what was yours, so if a trip came off
-       your line and somebody else flew it, this is where you say so. The
-       old rule — "already flown, never removable" — gave you no way to.
-
-       NOTHING HERE IS PRE-SELECTED, and that is the whole safety
-       mechanism, not a style choice. The help text invites pasting "one
-       trip or all of them", so a single-trip paste routinely says nothing
-       about the rest of the month. Pre-selecting these would make the
-       ordinary act of importing one trip delete a month of logbook by
-       default. Upcoming legs above ARE pre-selected, because there the
-       paste positively contradicts them.
-
-       The X is the same control as on the legs being imported, doing the
-       same thing in the same direction: it marks a row for exclusion and
-       is reversible without re-pasting. It works by toggling the
-       CHECKBOX, so the form still submits exactly what it always did —
-       there is no second removal mechanism to keep in step with the
-       first. #}
-    <div class="diff-sec sec-flown">
-      <div class="diff-head">
-        Already flown &mdash; not in this paste <span class="n">{{ removed_flown|length }}</span>
-      </div>
-      <p class="sub">
-        Did you fly these? This paste covers {{ scope_label }} but does not
-        mention them &mdash; which is normal if you pasted a single trip.
-        <strong>Nothing here is removed unless you mark it.</strong>
-        Mark a flight only if you did not fly it.
-      </p>
-      <div class="flown-actions">
-        <button type="button" class="flown-all" data-flown-all>Remove all</button>
-        <button type="button" class="flown-none" data-flown-none>Keep all</button>
-        <span class="flown-count" data-flown-count></span>
-      </div>
-      {% for r in removed_flown %}
-      <div class="diff-row flown-item">
-        <span class="body">
-          <strong>{{ r.callsign }}</strong>{% if r.is_deadhead %}<span class="dh">DH</span>{% endif %} {{ r.route }}
-          <span class="meta" style="display:block">{{ r.date_label }} &middot; {{ r.dep }} &ndash; {{ r.arr }}{% if r.same_zone and r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}</span>{% elif r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}/{{ r.arr_zone }}</span>{% endif %}</span>
-        </span>
-        {# The checkbox is the actual form control and stays reachable by
-           keyboard and screen reader; the X drives it. Visually hidden
-           rather than display:none, which would take it out of the tab
-           order and off the accessibility tree entirely. #}
-        <label class="flown-check">
-          <input type="checkbox" name="remove_id" value="{{ r.id }}" data-flown-box>
-          <span>Remove {{ r.callsign }} on {{ r.date_label }}</span>
-        </label>
-        <button type="button" class="flown-x" data-flown-x
-                title="I did not fly this &mdash; remove it"
-                aria-label="Remove {{ r.callsign }} on {{ r.date_label }}">&times;</button>
-        <input type="hidden" name="removable_id" value="{{ r.id }}">
-      </div>
-      {% endfor %}
-    </div>
-    {% endif %}
-
-    {% if not added and not changed and not removed and not removed_flown %}
-    <p class="nothing">Nothing would change — every flight in this paste is already on your schedule exactly as pasted.</p>
-    {% endif %}
-    {% if unchanged_count %}
-    <p class="nothing">{{ unchanged_count }} flight{{ "s" if unchanged_count != 1 }} already on your schedule and unchanged.</p>
-    {% endif %}
-
-    <details class="legs">
-      <summary>Trip breaks &amp; full list ({{ legs|length }} flight{{ "s" if legs|length != 1 }} in this paste)</summary>
-      <p class="sub">
-        Trip breaks 35+ hours apart were guessed and placed automatically.
-        Drag the <strong>☰</strong> handle to move one, tap <strong>×</strong> to remove one,
-        or tap <strong>+</strong> on any flight to add a break before it.
-      </p>
-    <div id="break-list">
-      {% for leg in legs %}
-        {% if leg.suggested_break_before %}
-        <div class="break-marker">
+        {% if r.suggested_break_before %}
+        <div class="brk">
           <span class="drag-handle" title="Drag to move">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
               <line x1="4" y1="7" x2="20" y2="7"></line>
@@ -307,177 +263,257 @@
               <line x1="4" y1="17" x2="20" y2="17"></line>
             </svg>
           </span>
-          <span class="break-label">New trip starts here</span>
-          <button type="button" class="break-delete" aria-label="Remove break">&times;</button>
+          <span class="lbl">New trip starts here</span>
+          {% if r.gap_label %}<span class="rest">{{ r.gap_label }} off</span>{% endif %}
+          <button type="button" class="x" aria-label="Remove this trip break">&times;</button>
+        </div>
+        {% elif r.gap_label and not loop.first %}
+        <div class="gap-note" data-rest="{{ r.gap_label }}">
+          {{ r.gap_label }} since the last arrival ·
+          <button type="button" class="add-brk">start a new trip here</button>
         </div>
         {% endif %}
-        <div class="leg-item">
-          <div class="leg-row">
-            <div>
-              <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
-              {{ leg.route }}
-              <div class="meta">{{ leg.date_label }} · {{ leg.dep }} – {{ leg.arr }}{% if leg.same_zone and leg.dep_zone %} <span class="tz" aria-hidden="true">{{ leg.dep_zone }}</span>{% elif leg.dep_zone %} <span class="tz" aria-hidden="true">{{ leg.dep_zone }}/{{ leg.arr_zone }}</span>{% endif %}</div>
-            </div>
-            <div class="leg-tools">
-              {% if not loop.first %}
-              <button type="button" class="add-break-btn" title="Add trip break before this flight">+</button>
-              {% endif %}
-              <button type="button" class="drop-leg-btn" title="Do not import this flight" aria-label="Do not import this flight">&times;</button>
-            </div>
+
+        {#- NO `off` class here, ever. `off` means "moved AWAY from this
+            row's default", and at render time every row IS at its
+            default — including `gone_flown`, whose default is to be left
+            alone. Deriving it from `default_on` struck through every
+            already-flown row on arrival, which reads as "this is being
+            deleted" when the truth is the exact opposite. -#}
+        <div class="prow {{ r.state }}"
+             data-state="{{ r.state }}"
+             data-on="{{ '1' if r.default_on else '0' }}"
+             {% if r.in_paste %}data-leg="1"{% endif %}>
+
+          {% if r.state in ('new', 'retimed', 'gone', 'gone_flown') %}
+          <button type="button" class="tog" data-tog
+                  aria-label="Change what happens to {{ r.callsign }} on {{ r.date_label }}">{{ '×' if r.default_on else '↺' }}</button>
+          {% else %}
+          <span class="tog" style="border-color:transparent"></span>
+          {% endif %}
+
+          <div class="body">
+            <div class="ttl">{{ r.callsign }}{% if r.is_deadhead %}<span class="dh">DH</span>{% endif %}
+              <span class="rt">{{ r.route }}</span></div>
+            <div class="meta">{{ r.dep }} – {{ r.arr }}{% if r.same_zone and r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}</span>{% elif r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}/{{ r.arr_zone }}</span>{% endif %}</div>
+            {% if r.was %}
+            <div class="was">On your schedule now: <s>{{ r.was.dep }} – {{ r.was.arr }}</s>{% if r.was.is_deadhead != r.is_deadhead %} · {% if r.is_deadhead %}now a deadhead{% else %}no longer a deadhead{% endif %}{% endif %}</div>
+            {% endif %}
+            {% if r.state == 'flown' %}
+            <div class="was">Already flown — an import never changes a flight that has happened.</div>
+            {% elif r.state == 'gone_flown' %}
+            <div class="was">Already flown, and this paste does not mention it. Remove it only if you did not fly it.</div>
+            {% endif %}
           </div>
-          <input type="hidden" name="leg_date" value="{{ leg.raw_date }}">
-          <input type="hidden" name="leg_flight" value="{{ leg.raw_flight }}">
-          <input type="hidden" name="leg_origin" value="{{ leg.raw_origin }}">
-          <input type="hidden" name="leg_dest" value="{{ leg.raw_dest }}">
-          <input type="hidden" name="leg_dep" value="{{ leg.raw_dep }}">
-          <input type="hidden" name="leg_arr" value="{{ leg.raw_arr }}">
-          <input type="hidden" name="leg_dh" value="{{ leg.raw_dh }}">
+
+          <span class="badge" data-badge>
+            {%- if r.state == 'new' %}Adding
+            {%- elif r.state == 'retimed' %}Retiming
+            {%- elif r.state == 'gone' %}Removing
+            {%- elif r.state == 'gone_flown' %}Keeping
+            {%- elif r.state == 'flown' %}Flown
+            {%- else %}No change{% endif -%}
+          </span>
+
+          {#- Only a row from the paste has anything to import. Switching a
+              row off DISABLES these, and a disabled input is not submitted
+              by any browser — which is the whole mechanism, and the reason
+              the server needs no per-row flag and no second code path. -#}
+          {% if r.in_paste %}
+          <input type="hidden" name="leg_date" value="{{ r.raw_date }}">
+          <input type="hidden" name="leg_flight" value="{{ r.raw_flight }}">
+          <input type="hidden" name="leg_origin" value="{{ r.raw_origin }}">
+          <input type="hidden" name="leg_dest" value="{{ r.raw_dest }}">
+          <input type="hidden" name="leg_dep" value="{{ r.raw_dep }}">
+          <input type="hidden" name="leg_arr" value="{{ r.raw_arr }}">
+          <input type="hidden" name="leg_dh" value="{{ r.raw_dh }}">
+          {% else %}
+          {#- A removal. The checkbox is the real control and stays in the
+              tab order and on the accessibility tree; the button drives it.
+              Visually hidden, never display:none — that would take it off
+              both and leave a stateless button as the only way in. -#}
+          <label class="sr-only-cb">
+            <input type="checkbox" name="remove_id" value="{{ r.id }}"
+                   data-rm {% if r.default_on %}checked{% endif %}>
+            <span>Remove {{ r.callsign }} on {{ r.date_label }}</span>
+          </label>
+          <input type="hidden" name="removable_id" value="{{ r.id }}">
+          {% endif %}
         </div>
       {% endfor %}
     </div>
-    </details>
+
+    <p class="helpnote">
+      <strong>Adding</strong> is a flight in this paste you do not have yet.
+      <strong>Retiming</strong> is one you already have, with times this paste
+      disagrees about — switch it off to keep the times on your schedule now.
+      <strong>Removing</strong> is an upcoming flight this paste leaves out.
+      Switching a retimed flight off leaves its whole row alone, including any
+      trip break sitting on it.
+    </p>
 
     <div class="actions">
       <a href="/flights" class="btn-cancel">Cancel</a>
-      <button type="submit" class="btn-confirm">Confirm &amp; Import</button>
+      <button type="submit" class="btn-confirm" id="go">Import</button>
     </div>
   </form>
 
   <script src="/static/vendor/Sortable.min.js?v={{ version }}"></script>
   <script>
-    const breakList = document.getElementById('break-list');
+  (function () {
+    var list = document.getElementById('plan-list');
+    if (!list) { return; }
 
-    new Sortable(breakList, {
-      draggable: '.break-marker',
-      handle: '.drag-handle',
-      animation: 150,
-    });
+    // Sortable is a separately-loaded file, so its absence must not take
+    // the page down with it (invariant 16). Everything below works
+    // without it; only DRAGGING a break is lost, and breaks can still be
+    // added and removed by tapping.
+    if (window.Sortable) {
+      new Sortable(list, { draggable: '.brk', handle: '.drag-handle', animation: 150 });
+    }
 
-    function makeBreakMarker() {
-      const div = document.createElement('div');
-      div.className = 'break-marker';
-      div.innerHTML =
+    // ONE table of words, so the badge on a row and the count at the top
+    // are written from the same source and cannot come to disagree.
+    var WORDS = {
+      'new':        ['Adding',   'Skipping'],
+      'retimed':    ['Retiming', 'Keeping mine'],
+      'gone':       ['Removing', 'Keeping'],
+      'gone_flown': ['Removing', 'Keeping']
+    };
+
+    function defaultOn(state) { return state !== 'gone_flown'; }
+
+    function breakMarker(rest) {
+      var d = document.createElement('div');
+      d.className = 'brk';
+      d.innerHTML =
         '<span class="drag-handle" title="Drag to move">' +
         '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">' +
         '<line x1="4" y1="7" x2="20" y2="7"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="17" x2="20" y2="17"></line>' +
-        '</svg></span>' +
-        '<span class="break-label">New trip starts here</span>' +
-        '<button type="button" class="break-delete" aria-label="Remove break">&times;</button>';
-      return div;
+        '</svg></span><span class="lbl">New trip starts here</span>' +
+        (rest ? '<span class="rest">' + rest + ' off</span>' : '') +
+        '<button type="button" class="x" aria-label="Remove this trip break">&times;</button>';
+      return d;
     }
 
-    breakList.addEventListener('click', function(e) {
-      if (e.target.classList.contains('break-delete')) {
-        e.target.closest('.break-marker').remove();
-        return;
-      }
-      if (e.target.classList.contains('drop-leg-btn')) {
-        // Toggle rather than remove: a dropped leg stays visible so the
-        // choice is reversible without re-pasting. Disabled inputs are not
-        // submitted by the browser, so the confirm step simply never sees
-        // it — no server change and nothing to keep in sync.
-        var item = e.target.closest('.leg-item');
-        var off = item.classList.toggle('dropped');
-        item.querySelectorAll('input[type=hidden]').forEach(function (i) {
-          i.disabled = off;
-        });
-        e.target.innerHTML = off ? '&#8635;' : '&times;';
-        e.target.title = off ? 'Import this flight after all' : 'Do not import this flight';
-        return;
-      }
-      if (e.target.classList.contains('add-break-btn')) {
-        const legItem = e.target.closest('.leg-item');
-        const prev = legItem.previousElementSibling;
-        if (prev && prev.classList.contains('break-marker')) {
-          return; // already has a break right before this flight
-        }
-        breakList.insertBefore(makeBreakMarker(), legItem);
-      }
-    });
+    function setOn(row, on) {
+      var state = row.getAttribute('data-state');
+      row.setAttribute('data-on', on ? '1' : '0');
+      row.classList.toggle('off', on !== defaultOn(state));
+      var words = WORDS[state];
+      var badge = row.querySelector('[data-badge]');
+      if (words && badge) { badge.textContent = on ? words[0] : words[1]; }
+      // A disabled input is not submitted, which is how a skipped leg
+      // never reaches the server at all.
+      Array.prototype.forEach.call(
+        row.querySelectorAll('input[type=hidden][name^=leg_]'),
+        function (i) { i.disabled = !on; });
+      var rm = row.querySelector('[data-rm]');
+      if (rm) { rm.checked = on; }
+      var tog = row.querySelector('[data-tog]');
+      if (tog) { tog.textContent = on ? '\u00D7' : '\u21BA'; }
+    }
 
-    document.getElementById('review-form').addEventListener('submit', function(e) {
-      const form = e.target;
-      const tripStarts = [];
-      let precededByBreak = true; // the very first flight is always a trip start
-      Array.from(breakList.children).forEach(function(child) {
-        if (child.classList.contains('break-marker')) {
-          precededByBreak = true;
-        } else if (child.classList.contains('leg-item')) {
-          // A dropped leg is not submitted, so it must not consume a
-          // trip_start slot either — the server pairs these up by
-          // position, and a mismatch would put every break one leg out.
-          if (child.classList.contains('dropped')) { return; }
-          tripStarts.push(precededByBreak ? '1' : '0');
-          precededByBreak = false;
-        }
+    function recount() {
+      var n = { 'new': 0, retimed: 0, removing: 0, keeping: 0 };
+      Array.prototype.forEach.call(list.querySelectorAll('.prow'), function (row) {
+        var on = row.getAttribute('data-on') === '1';
+        var st = row.getAttribute('data-state');
+        if (st === 'new' && on) { n['new']++; }
+        else if (st === 'retimed' && on) { n.retimed++; }
+        else if ((st === 'gone' || st === 'gone_flown') && on) { n.removing++; }
+        else { n.keeping++; }
       });
-      tripStarts.forEach(function(val) {
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 'leg_trip_start';
-        input.value = val;
-        form.appendChild(input);
-      });
-    });
-
-    // FLOWN-LEG REMOVAL (1.21.0). Its OWN listener on the document, not a
-    // branch inside the break-list handler: those rows are not in the
-    // break list, so a click there never reaches it — which is exactly
-    // the bug the first version of this shipped with. Separate IIFE too,
-    // so if the drag-and-drop library above fails to load, the controls
-    // that delete data still work.
-    (function () {
-      function flownCount() {
-        var el = document.querySelector('[data-flown-count]');
+      Object.keys(n).forEach(function (k) {
+        var el = document.querySelector('[data-count=' + k + ']');
         if (!el) { return; }
-        var n = document.querySelectorAll('.flown-item [data-flown-box]:checked').length;
-        el.textContent = n ? (n + ' marked for removal') : 'None marked';
-      }
-
-      function mark(item, on) {
-        var box = item.querySelector('[data-flown-box]');
-        if (!box) { return; }
-        box.checked = on;
-        item.classList.toggle('marked', on);
-        var x = item.querySelector('[data-flown-x]');
-        if (x) {
-          x.innerHTML = on ? '\u21BB' : '\u00D7';
-          x.title = on ? 'Keep this flight after all'
-                       : 'I did not fly this \u2014 remove it';
-        }
-      }
-
-      document.addEventListener('click', function (e) {
-        var x = e.target.closest ? e.target.closest('[data-flown-x]') : null;
-        if (x) {
-          var item = x.closest('.flown-item');
-          mark(item, !item.querySelector('[data-flown-box]').checked);
-          flownCount();
-          return;
-        }
-        var bulk = e.target.closest
-          ? e.target.closest('[data-flown-all], [data-flown-none]') : null;
-        if (bulk) {
-          var on = bulk.hasAttribute('data-flown-all');
-          document.querySelectorAll('.flown-item').forEach(function (fi) {
-            mark(fi, on);
-          });
-          flownCount();
-        }
+        el.querySelector('b').textContent = n[k];
+        el.classList.toggle('zero', n[k] === 0);
       });
+      var go = document.getElementById('go');
+      var changes = n['new'] + n.retimed + n.removing;
+      if (go) {
+        go.textContent = changes
+          ? ('Import ' + changes + ' change' + (changes === 1 ? '' : 's'))
+          : 'Nothing to change';
+      }
+    }
 
-      // The checkbox is still a real control for keyboard and screen
-      // reader users, so the row must follow it when it is driven
-      // directly rather than through the X.
-      document.addEventListener('change', function (e) {
-        if (e.target.hasAttribute && e.target.hasAttribute('data-flown-box')) {
-          mark(e.target.closest('.flown-item'), e.target.checked);
-          flownCount();
-        }
+    list.addEventListener('click', function (e) {
+      var tog = e.target.closest ? e.target.closest('[data-tog]') : null;
+      if (tog) {
+        var row = tog.closest('.prow');
+        setOn(row, row.getAttribute('data-on') !== '1');
+        recount();
+        return;
+      }
+      if (e.target.classList.contains('x') && e.target.closest('.brk')) {
+        e.target.closest('.brk').remove();
+        return;
+      }
+      if (e.target.classList.contains('add-brk')) {
+        var note = e.target.closest('.gap-note');
+        note.parentNode.insertBefore(
+          breakMarker(note.getAttribute('data-rest') || ''), note);
+        note.remove();
+      }
+    });
+
+    // The checkbox is still a real control for keyboard and screen-reader
+    // users, so the row must follow it when it is driven directly rather
+    // than through the button.
+    list.addEventListener('change', function (e) {
+      if (e.target.hasAttribute && e.target.hasAttribute('data-rm')) {
+        setOn(e.target.closest('.prow'), e.target.checked);
+        recount();
+      }
+    });
+
+    // THE BULK CONTROLS LIVE IN THE SUMMARY BAR, NOT IN THE LIST, so they
+    // get their OWN listener on the document. This is the 1.21.0 lesson
+    // written down: the first version of that feature put the branch
+    // inside the list's own handler, and because the buttons are not
+    // inside the list, no click ever reached it. It shipped doing
+    // nothing. A delegated listener here cannot make that mistake, and
+    // keeping it separate means a failure in the drag-and-drop library
+    // above cannot take the controls that delete data down with it.
+    document.addEventListener('click', function (e) {
+      var bulk = e.target.closest
+        ? e.target.closest('[data-flown-all], [data-flown-none]') : null;
+      if (!bulk) { return; }
+      var on = bulk.hasAttribute('data-flown-all');
+      Array.prototype.forEach.call(
+        list.querySelectorAll('.prow[data-state="gone_flown"]'),
+        function (row) { setOn(row, on); });
+      recount();
+    });
+
+    // TRIP BREAKS ARE PAIRED BY POSITION with the submitted legs, so this
+    // has to count exactly the rows the server will receive: rows that
+    // came from the paste AND are still switched on. A row that is off
+    // submits nothing and must not consume a slot, or every break after
+    // it lands one leg out.
+    document.getElementById('review-form').addEventListener('submit', function (e) {
+      var form = e.target;
+      var starts = [];
+      var afterBreak = true;     // the first flight is always a trip start
+      Array.prototype.forEach.call(list.children, function (child) {
+        if (child.classList.contains('brk')) { afterBreak = true; return; }
+        if (!child.classList.contains('prow')) { return; }
+        if (!child.hasAttribute('data-leg')) { return; }
+        if (child.getAttribute('data-on') !== '1') { return; }
+        starts.push(afterBreak ? '1' : '0');
+        afterBreak = false;
       });
+      starts.forEach(function (v) {
+        var i = document.createElement('input');
+        i.type = 'hidden'; i.name = 'leg_trip_start'; i.value = v;
+        form.appendChild(i);
+      });
+    });
 
-      flownCount();
-    })();
+    recount();
+  })();
   </script>
 {% include "partials/sw_register.html" %}
 </body>

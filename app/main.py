@@ -18,7 +18,8 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from .schedule import (load_schedule, get_current_info, delete_leg,
                        merge_schedule, remove_legs)
 from .importer import (ADDED, CHANGED, REMOVED, UNCHANGED, build_diff,
-                       month_labels, months_covered)
+                       build_plan, plan_summary, month_labels, months_covered,
+                       NEW, RETIMED, SAME, FLOWN, GONE, GONE_FLOWN)
 from .enrichment import query_stats, budget_state
 from .flights import get_flight, flight_key
 from .models import FlightLeg
@@ -38,6 +39,7 @@ from .auth import (
     reset_password_with_recovery_code, hash_password,
 )
 from .db import get_connection
+from . import feedback
 from . import simulator
 from markupsafe import Markup
 
@@ -871,6 +873,92 @@ def build_review_legs(legs: list, time_format: str = "24") -> list:
             "is_deadhead": leg.is_deadhead,
             "suggested_break_before": bool(leg.trip_start and i > 0),
         })
+    return out
+
+
+def build_plan_rows(plan: list, time_format: str = "24") -> list:
+    """Turn the import plan into rows the review page can draw. (1.30.0)
+
+    Replaces `build_review_legs` + `build_diff_rows`, which between them
+    produced two descriptions of the same flight for two different parts
+    of the old page — which is how the page came to show each flight
+    twice with two different controls.
+
+    Adds two things neither of those could, because neither had the whole
+    ordered list in front of it:
+
+    THE REST GAP BEFORE EACH ROW, in words. A trip break is a judgement
+    about how long he is home for, and the old page asked for that
+    judgement while showing only flight times — so placing a break meant
+    doing date arithmetic in your head across a page break. "38h at
+    home" beside the marker is the fact the decision actually turns on.
+
+    A HEADING WHEN THE DATE CHANGES, so a month reads as days rather
+    than as sixty rows. Same reasoning as the tracker's day headings.
+    """
+    out = []
+    prev_arr = None
+    prev_date = None
+    for entry in plan:
+        leg, was, state = entry["leg"], entry.get("was"), entry["state"]
+
+        # Rest since the previous leg landed, resolved through real UTC
+        # instants — never by subtracting one wall clock from another,
+        # which is the ANC-NRT bug of 1.1.0 and is wrong the moment a
+        # leg crosses a zone.
+        gap_h = None
+        dep = leg.dep_datetime_utc()
+        if prev_arr is not None and dep is not None:
+            gap_h = (dep - prev_arr).total_seconds() / 3600.0
+        gap_label = ""
+        if gap_h is not None and gap_h >= 3:
+            if gap_h >= 24:
+                days = int(gap_h // 24)
+                gap_label = ("%dh" % round(gap_h)) if gap_h < 48 else ("%d days" % days)
+            else:
+                gap_label = "%dh" % round(gap_h)
+
+        out.append({
+            "state": state,
+            "id": entry["id"],
+            "in_paste": entry["in_paste"],
+            "default_on": entry["default_on"],
+            # Raw fields for the hidden inputs. Only a row that came from
+            # the paste has anything to import, so only those carry them.
+            "raw_date": leg.date.isoformat(),
+            "raw_flight": leg.flight_number,
+            "raw_origin": leg.origin,
+            "raw_dest": leg.destination,
+            "raw_dep": leg.dep_time_local.isoformat(),
+            "raw_arr": leg.arr_time_local.isoformat(),
+            "raw_dh": "1" if leg.is_deadhead else "0",
+            "callsign": leg.callsign,
+            "route": f"{leg.origin} → {leg.destination}",
+            "date_label": leg.date.strftime("%a %b %d").replace(" 0", " "),
+            "new_day": leg.date != prev_date,
+            "dep": fmt_local(leg, "dep", time_format, with_zone=False),
+            "arr": fmt_local(leg, "arr", time_format, with_zone=False),
+            "dep_zone": tz_abbr(leg, "dep"),
+            "arr_zone": tz_abbr(leg, "arr"),
+            "same_zone": tz_abbr(leg, "dep") == tz_abbr(leg, "arr"),
+            "is_deadhead": leg.is_deadhead,
+            "gap_label": gap_label,
+            # Only ever a SUGGESTION, and only on a row that is actually
+            # being imported — a break is a roster fact written by the
+            # merge, so it has nowhere to land on a row the merge never
+            # sees.
+            "suggested_break_before": bool(leg.trip_start and out
+                                           and entry["in_paste"]),
+            "was": None if was is None else {
+                "dep": fmt_local(was, "dep", time_format, with_zone=False),
+                "arr": fmt_local(was, "arr", time_format, with_zone=False),
+                "is_deadhead": was.is_deadhead,
+            },
+        })
+        prev_date = leg.date
+        arr = leg.arr_datetime_utc()
+        if arr is not None:
+            prev_arr = arr
     return out
 
 
@@ -1711,10 +1799,26 @@ async def admin_diagnostics_save(request: Request):
     Rows arrive as url_N / key_N / enabled_N. A row whose URL has been
     cleared is dropped, which is how deleting works — no separate button and
     no row indices to keep in sync.
+
+    ADMIN-GATED as of 1.30.0, and it was not before. This route checked
+    `require_pilot` only, while its own sibling
+    `/admin/diagnostics/endpoints/reset` two functions down checked
+    `is_admin` — so on a shared install any FO with an account could
+    rewrite the feed list for EVERYONE, or point it somewhere that
+    answers nothing and take live tracking down for the whole box. The
+    page it posts from is admin-only, so nothing legitimate ever reached
+    it without the flag; that is exactly why it went unnoticed.
+
+    Worth stating the second reason too: the value saved here is a URL
+    this server then fetches, on a schedule, from inside the home
+    network. That is a request-forgery surface, and it belongs behind the
+    same gate as deleting an account.
     """
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
         return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse(url="/flights", status_code=303)
     from . import airplaneslive as _al
 
     form = await request.form()
@@ -1737,195 +1841,213 @@ async def admin_diagnostics_save(request: Request):
 def build_diagnostics_html(request: Request) -> str:
     """Why is there no ADS-B? Answers it in one block instead of in the logs.
 
-    Was a standalone page at /admin/diagnostics through 1.6.0. It is now a
-    SECTION of /admin, so this returns the markup rather than a response.
+    Was a standalone page at /admin/diagnostics through 1.6.0, then a
+    SECTION of /admin. As of 1.30.0 it is still that section, but it is
+    FETCHED SEPARATELY — see `admin_diagnostics_panel` below for why, and
+    for the reason this function is the slowest thing in the app.
 
     Every step of the live path is shown separately, because "no tracking"
     has half a dozen possible causes that look identical from the outside:
     the poller not running, the callsign never resolving, the provider
     returning nothing, or the match logic refusing what it returned. Each
     one is reported on its own line with the actual values involved.
+
+    MARKUP RULE (1.30.0): this emits the page's OWN classes — `.kv`,
+    `.dcard`, `.pill` — and no inline colours. It used to emit hardcoded
+    light-theme greys and then string-replace them for palette variables
+    on the way out, which worked and meant the only way to know what a
+    colour would be was to read a substitution table at the bottom of the
+    function. Classes are declared once in admin.html and theme for free.
     """
     import html as _html
-    import time as _time
     from . import airplaneslive as _al
     from . import poller as _poller
     from .flightmatch import evaluate as _evaluate
     from .livesource import live_state as _live_state
 
     out = []
+    esc = _html.escape
 
-    def row(label, value, ok=None):
-        colour = "" if ok is None else (
-            "color:#137333" if ok else "color:#c5221f;font-weight:600")
-        # NO nowrap, and the value is allowed to break mid-token. Values
-        # here are raw API output — a 180-character error body, a URL, a
-        # refusal reason — and on a phone any one of them used to push the
-        # whole page sideways. Breaking an ugly string across two lines is
-        # strictly better than a page that scrolls horizontally.
-        out.append(
-            "<tr><td style='padding:4px 12px 4px 0;color:var(--muted);"
-            "vertical-align:top;word-break:break-word'>%s</td>"
-            "<td style='padding:4px 0;word-break:break-word;%s'>"
-            "<code>%s</code></td></tr>"
-            % (_html.escape(str(label)), colour, _html.escape(str(value)))
-        )
+    def kv(label, value, ok=None):
+        cls = "" if ok is None else (" class='good'" if ok else " class='bad'")
+        out.append("<div class='kv'><span class='k'>%s</span>"
+                   "<span class='v'%s>%s</span></div>"
+                   % (esc(str(label)), cls, esc(str(value))))
 
-    out.append("<h2>Poller</h2><table>")
+    # ---- poller -----------------------------------------------------------
     running = _poller.is_running()
-    row("running", running, running)
     last = _poller.last_sweep_at()
-    row("last sweep", last.isoformat() if last else "never", last is not None)
-    row("sweeps from", "T-%s min" % (_poller.PREVIEW_WINDOW.total_seconds() / 60))
-    out.append("</table>")
+    out.append("<h3>Poller</h3><div class='dcard'>")
+    kv("Running", "yes" if running else "NO — nothing is being tracked", running)
+    kv("Last sweep", last.isoformat(timespec="seconds") if last else "never",
+       last is not None)
+    kv("Sweeps from", "T-%d min before departure"
+       % (_poller.PREVIEW_WINDOW.total_seconds() / 60))
+    out.append("</div>")
 
-    # A direct, uncached probe of the provider. This is the single most
-    # useful line on the page: if the endpoint has moved or is unreachable,
-    # everything downstream is None and nothing else here will make sense.
-    # Every configured feed is probed, not just the first, and each row is
-    # editable. When a feed shuts its doors — as airplanes.live did — the
-    # fix is toggling to another line here rather than a redeploy.
+    # ---- feeds ------------------------------------------------------------
+    # ONLY ENABLED FEEDS ARE PROBED (1.30.0). A probe is a real HTTP
+    # request through the shared 1.2s throttle, so each one costs at
+    # least that much wall-clock time plus however long the host takes.
+    # Probing a feed that is switched OFF buys nothing — the poller will
+    # never call it — and airplanes.live ships disabled and answers 403
+    # after a full round trip, so the default install was paying a
+    # timeout on every single admin page load to learn something it had
+    # already been told.
     locked = _al.endpoints_are_locked()
     eps = _al.load_endpoints()
-    out.append("<h2>ADS-B feeds</h2>")
+    hist = _al.recent_results()
+
+    out.append("<h3>ADS-B feeds</h3>")
     if locked:
-        out.append("<p style='color:#c5221f'>Pinned by <code>ADSB_ENDPOINTS</code> "
-                   "or <code>AIRPLANES_LIVE_BASE</code> in docker-compose.yml, so "
+        out.append("<p class='alert'>Pinned by <code>ADSB_ENDPOINTS</code> or "
+                   "<code>AIRPLANES_LIVE_BASE</code> in docker-compose.yml, so "
                    "edits here are ignored. Remove those lines to manage feeds "
                    "from this page.</p>")
-    out.append("<form method='post' action='/admin/diagnostics/endpoints'>")
-    out.append("<table style='width:100%;border-collapse:collapse'>"
-               "<tr style='text-align:left;color:#5f6368;font-size:12px'>"
-               "<th style='padding:4px 8px 4px 0'>On</th>"
-               "<th style='padding:4px 8px 4px 0'>Feed URL</th>"
-               "<th style='padding:4px 8px 4px 0'>API key (blank if none)</th>"
-               "<th style='padding:4px 0'>Status</th></tr>")
+
+    probes = []
     working = 0
-    for i, e in enumerate(eps):
+    for e in eps:
+        if not e.get("enabled", True):
+            probes.append((None, None, "not tested — this feed is switched off"))
+            continue
         status, count, msg = _al.probe(e["url"], api_key=e.get("api_key") or "")
         # 429 means the feed ANSWERED and asked us to slow down. That is
-        # proof it is alive, so it counts as working and is coloured amber
-        # rather than red. Reporting it as a failure is what made this page
-        # show every feed dead while flights were tracking normally.
+        # proof it is alive, so it counts as working and is drawn amber
+        # rather than red. Reporting it as a failure is what made this
+        # page show every feed dead while flights tracked normally.
         ok = (status == 200 and count is not None)
         limited = (status == 429)
-        if (ok or limited) and e.get("enabled", True):
+        if ok or limited:
             working += 1
-        label = ("HTTP %s" % status) if status else "no response"
-        detail = "%s — %s" % (label, ("%d aircraft" % count)
-                              if count is not None else msg)
-        checked = " checked" if e.get("enabled", True) else ""
+        probes.append((status, count, msg))
+
+    out.append("<form method='post' action='/admin/diagnostics/endpoints'>")
+    out.append("<div class='feedlist'>")
+    for i, e in enumerate(eps):
+        status, count, msg = probes[i]
+        on = e.get("enabled", True)
+        if not on:
+            state, label = "off", "off"
+        elif status == 200 and count is not None:
+            state, label = "good", "%d aircraft" % count
+        elif status == 429:
+            state, label = "warn", "rate limited"
+        else:
+            state, label = "bad", ("HTTP %s" % status) if status else "no response"
+        host = e["url"].replace("https://", "").replace("http://", "")
         out.append(
-            "<tr style='border-top:1px solid #e8eaed'>"
-            "<td style='padding:8px 8px 8px 0'>"
-            "<input type='checkbox' name='enabled_%d'%s></td>"
-            "<td style='padding:8px 8px 8px 0'>"
-            "<input name='url_%d' value='%s' style='width:100%%;min-width:210px;"
-            "padding:5px;font:12px monospace'></td>"
-            "<td style='padding:8px 8px 8px 0'>"
-            "<input name='key_%d' value='%s' placeholder='none' "
-            "style='width:100%%;min-width:110px;padding:5px;font:12px monospace'>"
-            "</td>"
-            "<td style='padding:8px 0;font-size:12px;%s'>%s</td></tr>"
-            % (i, checked, i, _html.escape(e["url"]), i,
-               _html.escape(e.get("api_key") or ""),
-               "color:#137333" if ok else
-               ("color:#b8860b" if limited else "color:#c5221f;font-weight:600"),
-               _html.escape(detail))
-        )
-    # One always-blank row, so adding a feed needs no separate button.
+            "<div class='feedrow'>"
+            "<label class='feedname'>"
+            "<input type='checkbox' name='enabled_%d'%s>"
+            "<span class='feedhost'>%s</span></label>"
+            "<span class='pill %s'>%s</span>"
+            "<div class='feeddetail'>%s</div>"
+            "<input class='feedurl' name='url_%d' value='%s' "
+            "inputmode='url' autocapitalize='off' spellcheck='false' "
+            "aria-label='Feed URL'>"
+            "<input class='feedkey' name='key_%d' value='%s' "
+            "placeholder='API key (blank if none)' autocapitalize='off' "
+            "spellcheck='false' aria-label='API key'>"
+            "</div>"
+            % (i, " checked" if on else "", esc(host), state, esc(label),
+               esc(msg or ""), i, esc(e["url"]), i,
+               esc(e.get("api_key") or "")))
     n = len(eps)
     out.append(
-        "<tr style='border-top:1px solid #e8eaed'>"
-        "<td style='padding:8px 8px 8px 0'><input type='checkbox' "
-        "name='enabled_%d' checked></td>"
-        "<td style='padding:8px 8px 8px 0'><input name='url_%d' value='' "
-        "placeholder='https://… add a feed' style='width:100%%;min-width:210px;"
-        "padding:5px;font:12px monospace'></td>"
-        "<td style='padding:8px 8px 8px 0'><input name='key_%d' value='' "
-        "placeholder='none' style='width:100%%;min-width:110px;padding:5px;"
-        "font:12px monospace'></td>"
-        "<td style='padding:8px 0;font-size:12px;color:#5f6368'>new</td></tr>"
-        % (n, n, n))
-    out.append("</table>")
-    out.append("<p style='margin-top:12px'>"
-               "<button type='submit' style='padding:8px 16px;font-size:14px'>"
-               "Save feeds &amp; re-test</button> "
-               "<span style='color:#5f6368;font-size:12px'>"
-               "Clear a URL to delete that row. Untick to keep it but skip it."
-               "</span></p></form>")
-    out.append(
-        "<p style='font-size:12px'>Feeds are tried in order until one "
-        "answers. Data from <a href='https://adsb.lol'>adsb.lol</a> (ODbL "
-        "1.0) and <a href='https://adsb.fi'>adsb.fi</a> (personal, "
-        "non-commercial). <a href='https://airplanes.live'>airplanes.live</a> "
-        "withdrew its free API in 2026 and is now feeder- or sponsor-only "
-        "\u2014 enable it above if you run a receiver or sponsor them, and "
-        "put it first.</p>")
-    out.append(
-        "<form method='post' action='/admin/diagnostics/endpoints/reset' "
-        "style='margin-top:8px'><button type='submit' style='padding:6px 12px;"
-        "font-size:12px'>Reset feeds to current defaults</button>"
-        "<span style='font-size:12px;color:var(--muted);margin-left:8px'>"
-        "Use this if the list above still names a feed that shut down "
-        "\u2014 a saved list overrides the built-in one.</span></form>")
+        "<div class='feedrow isnew'>"
+        "<label class='feedname'><input type='checkbox' name='enabled_%d' checked>"
+        "<span class='feedhost'>Add a feed</span></label>"
+        "<span class='pill off'>new</span>"
+        "<div class='feeddetail'>Leave blank if you are not adding one.</div>"
+        "<input class='feedurl' name='url_%d' value='' placeholder='https://…' "
+        "inputmode='url' autocapitalize='off' spellcheck='false' "
+        "aria-label='New feed URL'>"
+        "<input class='feedkey' name='key_%d' value='' "
+        "placeholder='API key (blank if none)' autocapitalize='off' "
+        "spellcheck='false' aria-label='New feed API key'>"
+        "</div>" % (n, n, n))
+    out.append("</div>")
+    out.append("<div class='btnrow'>"
+               "<button type='submit' class='primary'>Save feeds &amp; re-test</button>"
+               "</div>"
+               "<p class='note'>Clear a URL to delete that feed. Untick to keep "
+               "it but skip it — an unticked feed is not tested either, which "
+               "is why this page loads faster with fewer of them.</p>"
+               "</form>")
 
-    out.append("<table>")
-    # The probe says whether a feed answers ONE uncached request right now.
-    # Recent real lookups say whether tracking is actually working, and
-    # that is the question being asked. When they disagree the history
-    # wins, so the summary is built from both rather than the probe alone.
-    _hist = _al.recent_results()
-    _recent_ok = sum(1 for h in _hist[:15] if h.get("ok"))
+    # The probe says whether a feed answers ONE uncached request right
+    # now. Recent real lookups say whether tracking is actually working,
+    # and that is the question being asked. When they disagree the
+    # HISTORY wins (invariant 23), so the summary is built from both.
+    recent_ok = sum(1 for h in hist[:15] if h.get("ok"))
+    out.append("<div class='dcard'>")
     if working > 0:
-        row("feeds working", "%d enabled and answering" % working, True)
-    elif _recent_ok:
-        row("feeds working",
-            "probe says no, but %d of the last %d REAL lookups succeeded "
-            "\u2014 tracking is working and the probe is being rate limited"
-            % (_recent_ok, min(len(_hist), 15)), True)
+        kv("Verdict", "%d feed%s answering" % (working, "" if working == 1 else "s"),
+           True)
+    elif recent_ok:
+        kv("Verdict",
+           "probe says no, but %d of the last %d REAL lookups succeeded — "
+           "tracking is working and the probe is being rate limited"
+           % (recent_ok, min(len(hist), 15)), True)
     else:
-        row("feeds working", "none answering, and no recent lookup succeeded",
-            False)
-    out.append("</table>")
+        kv("Verdict", "no enabled feed answering, and no recent lookup succeeded",
+           False)
+    out.append("</div>")
     if not working:
-        out.append("<p style='color:#c5221f'><b>No enabled feed is answering.</b> "
+        out.append("<p class='alert'><strong>No enabled feed is answering.</strong> "
                    "Every lookup returns nothing and no flight will show live "
                    "tracking, however healthy the rest of the app looks.</p>")
 
-    # The probe above says whether the host answers RIGHT NOW. This says
-    # what the poller actually got on real flights, which is the question
-    # that matters and can disagree with the probe.
-    hist = _al.recent_results()
-    out.append("<h2>Recent real lookups</h2>")
+    out.append(
+        "<p class='note'>Feeds are tried in order until one answers. Data from "
+        "<a href='https://adsb.lol'>adsb.lol</a> (ODbL 1.0) and "
+        "<a href='https://adsb.fi'>adsb.fi</a> (personal, non-commercial). "
+        "<a href='https://airplanes.live'>airplanes.live</a> withdrew its free "
+        "API in 2026 and is now feeder- or sponsor-only \u2014 enable it above "
+        "if you run a receiver or sponsor them, and put it first.</p>")
+    out.append(
+        "<form method='post' action='/admin/diagnostics/endpoints/reset' "
+        "class='btnrow'><button type='submit'>Reset feeds to defaults</button>"
+        "<span class='note'>Use this if the list above still names a feed that "
+        "shut down \u2014 a saved list overrides the built-in one.</span></form>")
+
+    # ---- recent lookups, COLLAPSED ---------------------------------------
+    # Forty rows of history is the longest thing in this panel and is not
+    # what you look at first: the verdict above already tells you whether
+    # tracking is working, and this is the evidence behind it. Shut by
+    # default, with the score in the summary so closing it costs nothing.
+    # A native <details>, per invariant 16 — it opens with no JavaScript.
+    good = sum(1 for h in hist if h.get("ok"))
+    out.append("<details class='dfold'><summary>"
+               "<span>Recent real lookups</span>"
+               "<span class='dfold-v'>%s</span></summary><div class='dfold-b'>"
+               % (("%d of last %d ok" % (good, len(hist))) if hist else "none yet"))
     if not hist:
-        out.append("<p style='color:#5f6368'>Nothing recorded yet. This fills "
-                   "in as the poller looks up flights in the tracking "
-                   "window, and survives restarts.</p>")
+        out.append("<p class='note'>Nothing recorded yet. This fills in as the "
+                   "poller looks up flights in the tracking window, and "
+                   "survives restarts.</p>")
     else:
-        good = sum(1 for h in hist if h.get("ok"))
-        out.append("<p style='color:#5f6368;font-size:13px'>%d of the last %d "
-                   "lookups succeeded. If these are green while the probe "
-                   "above is red, the feed is working and the probe is being "
-                   "rate-limited — trust this table.</p>" % (good, len(hist)))
-        out.append("<table style='width:100%;border-collapse:collapse;"
-                   "font-size:12px'>")
+        out.append("<p class='note'>If these are green while a feed above is "
+                   "red, the feed is working and the probe is being rate "
+                   "limited \u2014 trust this list.</p>")
+        out.append("<div class='lookups'>")
         for h in hist[:15]:
             out.append(
-                "<tr style='border-top:1px solid #e8eaed'>"
-                "<td style='padding:5px 10px 5px 0;color:#5f6368;"
-                "white-space:nowrap'>%s</td>"
-                "<td style='padding:5px 10px 5px 0'>%s</td>"
-                "<td style='padding:5px 10px 5px 0;font-family:monospace'>%s</td>"
-                "<td style='padding:5px 0;%s'>%s</td></tr>"
-                % (_html.escape((h.get("at") or "")[5:16].replace("T", " ")),
-                   _html.escape(h.get("callsign") or ""),
-                   _html.escape((h.get("feed") or "").replace("https://", "")),
-                   "color:#137333" if h.get("ok") else "color:#c5221f",
-                   _html.escape(h.get("detail") or ""))
-            )
-        out.append("</table>")
+                "<div class='lookup %s'>"
+                "<span class='lk-cs'>%s</span>"
+                "<span class='lk-at'>%s</span>"
+                "<span class='lk-feed'>%s</span>"
+                "<span class='lk-detail'>%s</span></div>"
+                % ("good" if h.get("ok") else "bad",
+                   esc(h.get("callsign") or ""),
+                   esc((h.get("at") or "")[5:16].replace("T", " ")),
+                   esc((h.get("feed") or "").replace("https://", "")),
+                   esc(h.get("detail") or "")))
+        out.append("</div>")
+    out.append("</div></details>")
 
+    # ---- active flights ---------------------------------------------------
     # WHAT THIS SECTION IS FOR, because it was misleading before 1.8.0.
     # `active_flights()` returns whatever is inside the tracking WINDOW,
     # and a leg stays inside that window until 3 hours past its scheduled
@@ -1938,64 +2060,53 @@ def build_diagnostics_html(request: Request) -> str:
     # The poller was always right: `poll_once` skips closed legs. Only this
     # page was wrong. Closed legs are now listed separately and are NOT
     # probed.
-    out.append("<h2>Your active flights</h2>")
+    out.append("<h3>Your active flights</h3>")
     active = _poller.active_flights()
     _open, _done = {}, {}
     for _lid, _leg in active.items():
         _r = get_flight(_lid)
         (_done if (_r is not None and _r["closed"]) else _open)[_lid] = (_leg, _r)
     if _done:
-        out.append("<p style='color:#5f6368'>Not queried, because they are "
-                   "finished — still listed only because they are inside the "
-                   "3-hour window: " + ", ".join(
-                       "%s (closed by %s)" % (_html.escape(l.flight_number or i),
-                                              _html.escape((r["closed_by"] or "?")))
+        out.append("<p class='note'>Not queried, because they are finished — "
+                   "still listed only because they are inside the 3-hour "
+                   "window: " + ", ".join(
+                       "%s (closed by %s)" % (esc(l.flight_number or i),
+                                              esc((r["closed_by"] or "?")))
                        for i, (l, r) in _done.items()) + "</p>")
     active = {k: v[0] for k, v in _open.items()}
     if not active:
-        out.append("<p>Nothing OPEN in the tracking window right now. The "
-                   "poller looks at flights from T-%s minutes until 3 hours "
-                   "past scheduled arrival, and stops the moment a leg "
-                   "closes.</p>"
-                   % (_poller.PREVIEW_WINDOW.total_seconds() / 60))
+        out.append("<p class='note'>Nothing OPEN in the tracking window right "
+                   "now. The poller looks at flights from T-%d minutes until 3 "
+                   "hours past scheduled arrival, and stops the moment a leg "
+                   "closes.</p>" % (_poller.PREVIEW_WINDOW.total_seconds() / 60))
     for leg_id, leg in active.items():
-        out.append("<h3>%s &mdash; %s to %s</h3><table>"
-                   % (_html.escape(leg.flight_number or leg_id),
-                      _html.escape(leg.origin or "?"),
-                      _html.escape(leg.destination or "?")))
-        row("callsign searched", leg.callsign or "(none resolved)", bool(leg.callsign))
+        out.append("<h4>%s &mdash; %s to %s</h4><div class='dcard'>"
+                   % (esc(leg.flight_number or leg_id),
+                      esc(leg.origin or "?"), esc(leg.destination or "?")))
+        kv("Callsign searched", leg.callsign or "(none resolved)",
+           bool(leg.callsign))
         if leg.callsign:
             state = None
             try:
                 state = _live_state(leg.callsign, cache_ttl_s=0)
             except Exception as e:
-                row("lookup", "FAILED: %s" % e, False)
+                kv("Lookup", "FAILED: %s" % e, False)
             if state is None:
-                row("aircraft found", "NO — nothing broadcasting this callsign", False)
+                kv("Aircraft found", "NO — nothing broadcasting this callsign",
+                   False)
             else:
-                row("aircraft found", "yes", True)
+                kv("Aircraft found", "yes", True)
                 for k in ("icao24", "registration", "lat", "lon",
                           "on_ground", "altitude_ft", "speed_kts",
                           "position_age_s"):
-                    row(k, state.get(k))
+                    kv(k.replace("_", " "), state.get(k))
                 verdict = _evaluate(leg, state)
-                row("accepted as this leg", verdict.accepted, verdict.accepted)
+                kv("Accepted as this leg", verdict.accepted, verdict.accepted)
                 if not verdict.accepted:
-                    row("reason refused", verdict.reason, False)
-        out.append("</table>")
+                    kv("Reason refused", verdict.reason, False)
+        out.append("</div>")
 
-    # Hardcoded light-theme greys were fine on a standalone page; embedded
-    # in the themed admin page they were grey-on-black. Swapped for the
-    # palette variables so this section follows the theme like everything
-    # else. Kept as a string substitution rather than rewriting every row()
-    # call, because the generator above is long and entirely mechanical.
-    html = "".join(out)
-    for dead, live in (("#5f6368", "var(--muted)"),
-                       ("#137333", "#22c55e"),
-                       ("#c5221f", "#ef4444"),
-                       ("#e8eaed", "var(--border)")):
-        html = html.replace(dead, live)
-    return html
+    return "".join(out)
 
 
 @app.post("/admin/diagnostics/endpoints/reset")
@@ -2009,6 +2120,195 @@ async def admin_reset_endpoints(request: Request):
     from . import airplaneslive as _al
     _al.reset_endpoints()
     return RedirectResponse(url="/admin#diagnostics", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Feedback and bug reports (1.30.0)
+#
+# Anyone signed in can file one — a pilot from their own account, a viewer
+# from the invite they logged in with. That second half is the point. The
+# README has carried "Only the pilot ever tests the pilot's app" as an open
+# problem for several releases: the settings tab bounced every viewer to a
+# login screen for an unknown number of releases, and the only reason it
+# was ever found is that a family member happened to mention it out loud.
+# There was no route from the person using the app to the person who can
+# fix it. This is that route.
+# ---------------------------------------------------------------------------
+
+def _reporter_identity(request: Request):
+    """Who is filing this, as (user_id, display name, is_viewer).
+
+    Returns None when nobody is signed in at all, which is the only case
+    that gets turned away — a bug report form that accepts anonymous
+    posts from the internet is a spam endpoint attached to an admin's
+    inbox.
+    """
+    pilot = current_pilot(request)
+    if pilot:
+        return pilot["id"], pilot["username"], False
+    viewer_id = current_viewer_user_id(request)
+    if viewer_id:
+        # The invite NAME, not the code. The code is a live credential
+        # and must never be written into a table an admin reads casually
+        # or downloads as a text file; the name is what the pilot knows
+        # the person by anyway ("Mum", "Sarah"), which is the useful
+        # half. An unnamed invite falls back to something honest rather
+        # than to the digits.
+        name = ""
+        code = request.session.get("viewer_code") or ""
+        try:
+            for inv in share_codes_for(viewer_id):
+                if inv["code"] == code:
+                    name = (inv["name"] or "").strip()
+                    break
+        except Exception:
+            name = ""
+        return viewer_id, (name or "a viewer"), True
+    return None
+
+
+@app.post("/feedback")
+async def feedback_submit(request: Request, message: str = Form(""),
+                          kind: str = Form("bug"), page: str = Form("")):
+    """Store one report and send the reporter back where they came from.
+
+    POST-redirect-GET, like every other form in this app since 1.25.0: a
+    pull-to-refresh after sending must not offer to send it again. The
+    thank-you rides in the session rather than the URL, so it cannot be
+    forged onto somebody's screen by a crafted link.
+
+    The BUILD and the DEVICE are read from the server side — VERSION as
+    this process knows it, and the browser's own User-Agent header —
+    rather than from hidden form fields. A hidden field is whatever the
+    page was rendered with, and the single commonest failure in this
+    app's history is a phone running the PREVIOUS release's markup. A
+    stale page would have reported a stale version, which is precisely
+    the case where the version matters most.
+    """
+    who = _reporter_identity(request)
+    if who is None:
+        return RedirectResponse(url="/login", status_code=303)
+    user_id, name, is_viewer = who
+
+    back = (page or request.headers.get("referer") or "/").strip()
+    # Only ever return somewhere on this site. An open redirect on a form
+    # anyone signed in can post to is not worth the convenience.
+    if not back.startswith("/") or back.startswith("//"):
+        back = "/"
+
+    if not (message or "").strip():
+        request.session["_fb_error"] = "Nothing was sent — the message was empty."
+        return RedirectResponse(url=back, status_code=303)
+
+    ok = feedback.submit(
+        user_id=user_id, reporter=name, is_viewer=is_viewer, kind=kind,
+        message=message, page=back, app_version=VERSION,
+        user_agent=request.headers.get("user-agent", ""))
+    request.session["_fb_notice"] = (
+        "Thanks — that has gone to the admin inbox." if ok else
+        "That could not be saved. Please try again.")
+    return RedirectResponse(url=back, status_code=303)
+
+
+@app.post("/admin/feedback/{report_id}/status")
+async def admin_feedback_status(request: Request, report_id: int,
+                                status: str = Form("open")):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse(url="/flights", status_code=303)
+    feedback.set_status(report_id, status, by=pilot["username"])
+    return RedirectResponse(url="/admin#inbox", status_code=303)
+
+
+@app.post("/admin/feedback/{report_id}/delete")
+async def admin_feedback_delete(request: Request, report_id: int):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse(url="/flights", status_code=303)
+    feedback.delete(report_id)
+    return RedirectResponse(url="/admin#inbox", status_code=303)
+
+
+@app.get("/admin/feedback/download")
+async def admin_feedback_download(request: Request, limit: int = 200):
+    """The inbox as plain text.
+
+    Same reasoning as the decision log's download: the useful thing to do
+    with a bug report is paste it somewhere else, and selecting text out
+    of a scrolling panel on a phone is not a way to do that.
+    """
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse(url="/flights", status_code=303)
+    rows = feedback.recent(limit=limit)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    body = (f"MyPilot feedback — {len(rows)} report(s), build {VERSION}\n"
+            + "=" * 60 + "\n" + feedback.as_text(rows))
+    return PlainTextResponse(body, headers={
+        "Content-Disposition": f'attachment; filename="mypilot-feedback-{stamp}.txt"'})
+
+
+@app.get("/admin/diagnostics/panel", response_class=HTMLResponse)
+def admin_diagnostics_panel(request: Request):
+    """The Live-tracking section, fetched AFTER the admin page has drawn.
+
+    WHY THE ADMIN PAGE WAS SLOW, AND WHY THE FIX IS A SECOND REQUEST
+    ----------------------------------------------------------------
+    `build_diagnostics_html` is the only thing in this app that makes
+    outbound network calls while somebody is waiting for a page. It
+    probes every configured feed, and every probe goes through
+    `livesource.throttle`, which sleeps to hold the shared 1.2-second
+    floor. Three feeds is therefore 3.6 seconds of deliberate sleeping
+    before any network latency at all — and a feed that is down costs
+    `REQUEST_TIMEOUT`, twelve seconds, each. Then, for every open leg, it
+    fires an UNCACHED live lookup, which takes another turn through the
+    same throttle. A quiet install sat around five seconds; a bad feed
+    plus a couple of active legs was half a minute.
+
+    That work still has to happen — it is the diagnosis, and a probe that
+    used a cached answer would not be one. What it must not do is happen
+    BEFORE the page exists. People, Test mode, Feedback and the log are
+    all pure database reads and take milliseconds; they were being held
+    hostage by the one section that talks to the internet. Now the page
+    returns immediately and this fills in underneath it.
+
+    `def`, NOT `async def`, AND THAT IS THE IMPORTANT HALF.
+    ------------------------------------------------------
+    Every route in this file is `async def`, which is correct for the
+    ones that only touch SQLite. It was badly wrong here: an `async def`
+    route runs ON the event loop, so `time.sleep()` inside throttle() and
+    a blocking `requests.get()` do not just delay this response — they
+    stop the whole server. Nothing else was served while the admin page
+    was loading. A family member's tracker polling every fifteen seconds
+    during a flight would hang for as long as the probe took.
+
+    Starlette runs a plain `def` in a worker thread instead, so the
+    blocking calls sit there without freezing anything. Together the two
+    changes mean opening admin no longer costs anyone else a stall.
+    """
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return HTMLResponse("", status_code=403)
+    try:
+        return HTMLResponse(build_diagnostics_html(request))
+    except Exception as e:
+        # An exception here must not blank the section. The panel exists
+        # to be read when something is already wrong, and "the
+        # diagnostics page must not be the broken thing" is invariant 23.
+        import html as _h
+        return HTMLResponse(
+            "<p class='alert'>Diagnostics could not be built: <code>%s</code>"
+            "</p><p class='note'>The rest of this page is unaffected. Check "
+            "<code>docker compose logs</code> for the traceback.</p>"
+            % _h.escape(str(e)))
 
 
 @app.get("/admin/diagnostics")
@@ -2072,7 +2372,11 @@ async def admin_page(request: Request, subject: Optional[str] = None,
         request=request, settings=settings.model_dump(),
         people=list_all_users(), pilot_id=pilot["id"],
         sim_rows=sim_rows, sim_scenarios=sim_scenarios,
-        diagnostics_html=Markup(build_diagnostics_html(request)),
+        # NOT built here any more (1.30.0). See admin_diagnostics_panel.
+        # This page used to call build_diagnostics_html() inline, which
+        # is the reason it took ten to thirty seconds to open.
+        inbox=feedback.recent(limit=50), inbox_counts=feedback.counts(),
+        feedback_kinds=feedback.KINDS,
         log_enabled=debuglog.ENABLED, log_events=log_events,
         log_subject=subject or "", log_event=event or "", log_q=q or "",
         log_limit=limit, log_names=log_names, log_max_id=log_max_id,
@@ -2280,29 +2584,39 @@ async def admin_import(request: Request, text: str = Form(...)):
     settings = load_settings(pilot["id"])
 
     now = datetime.now(timezone.utc)
-    diff = build_diff(legs, load_schedule(pilot["id"]), now)
-    review_legs = build_review_legs(legs, settings.time_format)
+    plan = build_plan(legs, load_schedule(pilot["id"]), now)
+    rows = build_plan_rows(plan, settings.time_format)
     template = jinja_env.get_template("import_review.html")
     return HTMLResponse(template.render(
-        request=request, legs=review_legs, settings=settings.model_dump(),
+        request=request, settings=settings.model_dump(),
         scope_label=month_labels(months_covered(legs)),
-        added=build_diff_rows(diff[ADDED], settings.time_format),
-        changed=build_diff_rows(diff[CHANGED], settings.time_format),
-        # SPLIT, because they are two different statements. An upcoming
-        # leg missing from the paste is the paste CONTRADICTING it, and is
-        # ticked. A flown leg missing from the paste is the paste being
-        # SILENT about it — routine, since one trip can be pasted on its
-        # own — so it is offered unticked. See app/importer.py.
-        removed=[r for r in build_diff_rows(diff[REMOVED], settings.time_format)
-                 if not r["flown"]],
-        removed_flown=[r for r in build_diff_rows(diff[REMOVED], settings.time_format)
-                       if r["flown"]],
-        unchanged_count=len(diff[UNCHANGED]),
+        rows=rows, counts=plan_summary(plan),
+        paste_count=len(legs),
     ))
 
 
 @app.post("/flights/import/confirm")
 async def admin_import_confirm(request: Request):
+    """Apply exactly what the review page left switched on. (1.30.0 note)
+
+    THE FORM CONTRACT, because it is not obvious from the field names.
+    A leg is imported if and only if its hidden inputs arrive. The page
+    switches a row OFF by DISABLING its inputs, and a disabled input is
+    not submitted by any browser — so "skip this one" needs no server
+    support, no per-row flag and no second code path. That is why the
+    review page can offer six different decisions and this route still
+    only has two jobs: merge what arrived, remove what was ticked.
+
+    It is also what makes DECLINING A RETIME work, which was impossible
+    before. A retimed leg switched off simply is not in the merge, and
+    merge_schedule only ever writes the legs it is given — so the row
+    already on the roster keeps the times it has. Nothing here had to
+    learn a new verb.
+
+    The honest cost of that, stated on the page: declining a retime
+    declines the WHOLE row, including any trip break moved onto it,
+    because the row is what carries both.
+    """
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
         return pilot
@@ -2724,6 +3038,19 @@ async def settings_page(request: Request):
     ctx["notice"] = request.session.pop("_settings_notice", "")
     ctx["error"] = request.session.pop("_settings_error", "")
     ctx["open_group"] = request.session.pop("_settings_open", "")
+    # The feedback form posts from this page and redirects back to it, so
+    # its result shares the same two slots. Read AFTER the settings ones
+    # so a report sent from here cannot be silently swallowed by an empty
+    # settings flash sitting in front of it.
+    fb_notice = request.session.pop("_fb_notice", "")
+    fb_error = request.session.pop("_fb_error", "")
+    if fb_notice:
+        ctx["notice"] = fb_notice
+        ctx["open_group"] = "feedback"
+    if fb_error:
+        ctx["error"] = fb_error
+        ctx["open_group"] = "feedback"
+    ctx["feedback_kinds"] = feedback.KINDS
     template = jinja_env.get_template("settings.html")
     # NO all_users here any more (1.6.0). Administering the install moved
     # to /admin in one piece; leaving a second copy of the people table

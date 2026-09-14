@@ -2560,44 +2560,81 @@ def test_late_is_measured_from_the_airlines_own_schedule(uid):
 
 
 def test_flown_legs_are_removed_by_hand_never_by_default():
-    """Remove all, individual X, nothing pre-selected. (1.21.0)"""
+    """Nothing pre-selected, a bulk control, and one piece of form state.
+
+    REWRITTEN in 1.30.0, not deleted. This test was correct and it pinned
+    MARKUP — `class="diff-sec sec-flown"`, `data-flown-box`, a `.flown-check`
+    CSS block — from a page that has since been rebuilt as a single list.
+    The RULES it defends all survive the rebuild intact, so they are
+    asserted against the new page instead. Same trap already recorded
+    above `test_zone_never_wraps_a_time` and in 1.25.0's rewrite of
+    `test_settings_is_one_page`: a test that pins one surface's markup
+    makes replacing that surface look like a regression.
+
+    What is being defended, and why each one matters:
+
+      * A flown leg the paste omits is NEVER pre-selected for removal.
+        This is the whole safety mechanism (1.20.0/1.21.0). The help text
+        invites pasting "one trip or all of them", so a single-trip paste
+        routinely says nothing about the rest of the month — pre-ticking
+        these would delete a month of history by default.
+      * An UPCOMING leg the paste omits IS pre-selected, because there the
+        paste positively contradicts it. The two defaults being opposite
+        is the point; a test that only checked one of them would pass on a
+        page that had quietly made them the same.
+      * The submitted control is a real checkbox that stays reachable by
+        keyboard and screen reader, with the button driving it — ONE piece
+        of form state, not two mechanisms to keep in step.
+      * The bulk control's listener is not trapped somewhere its clicks
+        cannot reach, which is the bug 1.21.0 shipped and caught.
+    """
     here = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(here, "templates", "import_review.html"), encoding="utf-8") as fh:
+    with open(os.path.join(here, "templates", "import_review.html"),
+              encoding="utf-8") as fh:
         html = fh.read()
 
-    # Sliced to the section's own closing tag, not to the first
-    # {% endif %} — that one belongs to the inline deadhead conditional
-    # INSIDE the first row, so the slice stopped before the X button and
-    # three assertions passed on an empty-ish string.
-    sec = html.split('class="diff-sec sec-flown"', 1)[1].split("</div>\n    {% endif %}", 1)[0]
-    # NOTHING PRE-SELECTED. This is the safety mechanism, not a style
-    # choice: pasting one trip says nothing about the rest of the month,
-    # so a pre-ticked list would delete a month of logbook by default.
-    check("no flown leg is pre-selected for removal", "checked" not in sec, sec[:200])
-    check("...while an upcoming leg still is",
-          "checked" in html.split('class="diff-sec sec-removed"', 1)[1][:900])
-    check("the section asks whether they were flown", "Did you fly these?" in sec)
-    check("there is a remove-all", "data-flown-all" in sec)
-    check("...and a way back", "data-flown-none" in sec)
-    check("each flight has its own X", "data-flown-x" in sec)
+    # The two removal states and their opposite defaults. Read off the
+    # template's own conditional rather than off a rendered page, because
+    # this is the line that decides it.
+    check("a removal row's tick follows the row's own default",
+          'data-rm {% if r.default_on %}checked{% endif %}' in html)
+    check("...and the defaults are declared once, as data, in importer.py",
+          "PLAN_DEFAULT_ON" in open(
+              os.path.join(here, "app", "importer.py"), encoding="utf-8").read())
 
-    # ONE PIECE OF FORM STATE. The X drives the checkbox rather than
-    # replacing it, so there is no second removal mechanism to keep in
-    # step with the first.
-    check("the X drives the real checkbox", "data-flown-box" in sec)
-    check("...which is still the submitted control", 'name="remove_id"' in sec)
+    imp = open(os.path.join(here, "app", "importer.py"), encoding="utf-8").read()
+    defaults = imp.split("PLAN_DEFAULT_ON = ", 1)[1].split("}", 1)[0]
+    check("an ALREADY-FLOWN leg the paste omits is NOT pre-ticked",
+          "GONE_FLOWN: False" in defaults, defaults)
+    check("...while an UPCOMING one the paste omits IS",
+          "GONE: True" in defaults, defaults)
+
+    # The bulk control the owner asked for in 1.21.0.
+    check("there is a remove-all for the flown group", "data-flown-all" in html)
+    check("...and a way back", "data-flown-none" in html)
+    check("...shown only when there is something for it to act on",
+          "{% if counts.gone_flown %}" in html)
+
+    # ONE PIECE OF FORM STATE. The button drives the checkbox rather than
+    # replacing it, so there is no second removal mechanism.
+    check("the submitted control is still a real checkbox",
+          'name="remove_id"' in html and "data-rm" in html)
+    check("...guarded by the offered-list check on the server",
+          'name="removable_id"' in html)
     # Visually hidden, NOT display:none, which would take it out of the
-    # tab order and off the accessibility tree and leave the X — a button
-    # with no state — as the only way in.
-    css = html.split(".flown-check {", 1)[1].split("}", 1)[0]
-    check("the checkbox stays reachable by keyboard", "display: none" not in css, css)
+    # tab order and off the accessibility tree and leave a button with no
+    # state as the only way in.
+    css = html.split(".sr-only-cb {", 1)[1].split("}", 1)[0]
+    check("the checkbox stays reachable by keyboard",
+          "display: none" not in css and "clip:" in css, css)
 
-    # ITS OWN LISTENER ON THE DOCUMENT. The first version of this put the
-    # branch inside the break-list handler, where a click on a flown row
-    # never reaches it.
-    check("the handler is not trapped in the break-list listener",
-          "breakList.addEventListener" not in
-          html.split("FLOWN-LEG REMOVAL", 1)[1].split("})();", 1)[0])
+    # THE 1.21.0 BUG, GUARDED. The bulk buttons live in the summary bar,
+    # OUTSIDE #plan-list, so a branch inside the list's own click handler
+    # would never fire. They must have their own delegated listener.
+    bulk_block = html.split("THE BULK CONTROLS LIVE IN THE SUMMARY BAR", 1)
+    check("the bulk control has its own listener, not a branch in the list's",
+          len(bulk_block) == 2 and
+          "document.addEventListener('click'" in bulk_block[1])
     check("a change on the checkbox itself still updates the row",
           "addEventListener('change'" in html)
 
@@ -3008,42 +3045,72 @@ def test_html_is_never_cached():
 
 
 def test_review_page_carries_removals_and_breaks():
-    """One page for every decision about a paste. (N1, 1.5.0)
+    """One page, and now ONE LIST, for every decision about a paste.
 
-    The owner's instruction was that removals belong on the page that lets
-    you add trip separations, not a separate step. Two different removals
-    live here and they are NOT the same thing:
+    (N1, 1.5.0. Rewritten for the rebuilt page, 1.30.0.)
 
-      * dropping a leg OUT OF THE PASTE — it was in the FFDO but should not
-        be imported;
-      * removing a leg already on the ROSTER that this paste no longer
-        mentions.
+    The owner's original instruction was that removals belong on the page
+    that lets you set trip separations, not in a separate step. That was
+    honoured in 1.5.0 and then quietly undermined: the decisions ended up
+    in four read-only summaries at the top while the CONTROLS lived in a
+    collapsed section at the bottom, so every flight appeared twice and
+    the copy you were looking at did nothing. 1.30.0 merged them.
 
-    Both are proposals. Nothing on this page writes anything until confirm.
+    So this now asserts the stronger form of the same rule: every kind of
+    decision is on one page AND on one row.
+
+    Three kinds of decision live here, and they are NOT the same thing:
+
+      * skipping a leg that IS in the paste — it was on the FFDO but
+        should not be imported;
+      * declining a RETIME — the leg is on the roster, the paste
+        disagrees about its times, and the roster wins. This was
+        impossible before 1.30.0;
+      * removing a leg already on the ROSTER that this paste omits.
+
+    All three are proposals. Nothing on this page writes anything until
+    confirm.
     """
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "templates", "import_review.html"),
               encoding="utf-8") as fh:
         ir = fh.read()
-    check("legs in the paste can be dropped individually", "drop-leg-btn" in ir)
-    check("...on the same page as the trip breaks, not a separate step",
-          "drop-leg-btn" in ir and "add-break-btn" in ir)
-    check("...by disabling inputs, so the browser simply never posts them",
-          "i.disabled = off" in ir)
+
+    check("every flight is drawn by ONE row component", ir.count('class="prow') >= 1)
+    check("...and each actionable row carries its own control",
+          "data-tog" in ir)
+    check("trip breaks are in the SAME list as the flights, not a "
+          "separate collapsed section",
+          '<div id="plan-list">' in ir and 'class="brk"' in ir and
+          "details" not in ir.split('<div id="plan-list">', 1)[1]
+          .split("</div>\n\n    <p class=\"helpnote\"", 1)[0])
+    check("...with the rest gap printed beside them, which is what the "
+          "decision actually turns on",
+          "gap_label" in ir and "since the last arrival" in ir)
+
+    check("a leg is skipped by DISABLING its inputs, so the browser "
+          "simply never posts them",
+          "i.disabled = !on" in ir)
     check("...leaving the row visible so the choice is reversible",
-          ".leg-item.dropped" in ir and "classList.toggle('dropped')" in ir)
-    check("a dropped leg does not consume a trip_start slot",
-          "classList.contains('dropped')) { return; }" in ir)
-    check("roster removals are proposed separately from the paste list",
-          'name="remove_id"' in ir and 'name="removable_id"' in ir)
-    check("...ticked by default, because a re-paste usually is the truth",
-          'name="remove_id"' in ir and "checked" in ir)
+          ".prow.off" in ir and "classList.toggle('off'" in ir)
+    check("a skipped leg does not consume a trip_start slot",
+          "getAttribute('data-on') !== '1') { return; }" in ir)
+
+    check("roster removals ride on the same rows", 'name="remove_id"' in ir)
+    check("...guarded server-side by the offered list",
+          'name="removable_id"' in ir)
+    check("...ticked by default for an upcoming leg, because there the "
+          "paste contradicts it",
+          'data-rm {% if r.default_on %}checked{% endif %}' in ir)
+
     check("the page says which months it is allowed to touch",
           "scope_label" in ir)
-    check("...and says outright that flown legs are safe, whether or not",
-          "already flown are never removed by an import" in ir)
-    check("...that reassurance showing even when nothing is being removed",
-          ir.find("already flown are never removed") < ir.find("{% if removed %}"))
+    check("...and says outright that flown legs are safe",
+          "already flown can never" in ir)
+    check("...in the summary at the top, so the reassurance is there "
+          "before any row is read",
+          ir.find("already flown can never")
+          < ir.find('<div id="plan-list">'))
 
 
 def test_flights_page_filters_by_month():

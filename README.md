@@ -1,10 +1,10 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.24.5.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge.
 
-The version above was stale at 1.4.0 for five releases. `app/version.py`
-is the only authority; this line is a convenience and nothing reads it.
+`app/version.py` is the ONLY authority on the version number. This file
+does not restate it, because for five releases it did and was wrong.
 
 Formerly "flight-tracker" / "Pilot Tracker". Renamed in 1.0.0; see VERSION
 HISTORY for why the version number restarted.
@@ -48,349 +48,136 @@ seriously.
 
 ## STATE
 
-**v1.25.2.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
-owner plus several FOs, who fly the same legs — hence shared flight rows
-(v5.1, retained).
+**v1.30.0.** Renamed to MyPilot in 1.0.0. Deployed on TrueNAS via Dockge.
+Multi-user: the owner plus several FOs, who fly the same legs — hence
+shared flight rows (v5.1, retained).
 
-The v6.4–v7.4 documentation gap is CLOSED as far as inspection can close it:
-what those versions built has been verified against the tree and folded into
-the sections below. Their RATIONALE is still unrecorded and unrecoverable —
-if you are about to change the shared stylesheet, the tab bar, or the light
-theme, read the code, because this file cannot tell you why they are the way
-they are.
+Tests: **2,267**, twelve suites, all passing.
 
-**Current work: see `## NEXT UP`.** N1 is DONE (1.5.0). N4 (invites) is
-next and is now unblocked: flights accumulate, the roster is month-filtered
-and chronologically ordered, `in_actual_api` is chased rather than lost, and
-simulated legs are flagged so nothing rehearsed is ever mistaken for flown.
+**THE v1.26–v1.29.2 HISTORY IS RECONSTRUCTED, NOT RECORDED.** Five
+releases shipped without VERSION HISTORY entries, exactly as v6.4–v7.4
+did. What they BUILT has been recovered from annotations in the tree and
+is written up at the bottom of the history under a heading that says so.
+Their RATIONALE is gone. If you are about to change reserve days, the
+radar proxy, the shared basemap or the tracker topbar, read the code —
+this file cannot tell you why they are the way they are.
 
-Not on any list, done along the way: test mode, a second admin, and the
-page split (1.6.0–1.7.0). All three came out of the same problem — the app
-could not be OPERATED without SSH, and bugs could not be reproduced without
-flying a trip.
+The lesson is the one already recorded against v6.4–v7.4 and it did not
+take: the session-end protocol above is not optional paperwork. A release
+that ships without its entry is a release whose reasoning is lost, and
+the reasoning is the only part that cannot be re-derived.
 
-Tests: **2,086**, twelve suites, all passing.
+**Current work: operability (1.30.0).** The app works; the things around
+it did not. Feedback had no route from the people using the app to the
+person who can fix it, the admin page took tens of seconds to open and
+froze the server while it did, and the import review showed every flight
+twice. All three are closed. See the 1.30.0 entry.
 
-**Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
-brief, reworking the tracker and calendar around one flight-strip
-component modelled on a reference consumer app. This is NOT a detour
-around NEXT UP — N4 (invites) still follows — but the tracker had grown
-three different ways of drawing the same thing and the calendar had to
-become the history browser before past flights could leave the tracker.
-
-| Step | What | State |
-|---|---|---|
-| 1 | the `.fstrip` component + the current flight card | **DONE 1.9.0** |
-| 2 | the expanded view, on the reference layout | **DONE 1.10.0-1.10.2** |
-| 3 | tracker list: current trip only, no past-flights toggle, positioned on the live leg | **DONE 1.11.0 + 1.12.0, actually one trip 1.16.0** |
-| 3b | the row dropdown onto `.aptblock` | **SUPERSEDED** — the tracker's dropdown was deleted in 1.14.1 (a row tap opens the full panel). `.aptblock` went to the CALENDAR instead, 1.18.0 |
-| 4 | calendar: expandable strips with history and a mini map | **DONE 1.18.0** |
-| 5 | regression pass across themes, time formats and the odd states | **DONE 1.19.0** |
-
-Step 3 carries a DECIDED behaviour worth not re-litigating: once a trip
-ends, the first leg of the NEXT trip takes the card, so the question "when
-do I leave again" is answered without navigating. And past flights leave
-the tracker entirely — they belong to step 4's calendar.
-
-**AMENDED 1.16.0, both halves.** The next trip does not take the card the
-instant the last leg ends — it takes it `TRIP_HANDOVER` (10h, FAR 117's
-rest minimum) after the final landing, because handing over immediately
-wipes the just-finished trip off the page while the pilot is still in the
-crew van. And the next trip is no longer in the LIST at all, only the
-card's eventual destination: showing it alongside the current one put a
-second "Day 1" under the first trip's last overnight. See WHICH TRIP THE
-TRACKER SHOWS.
-
-| Suite | N | Covers |
-|---|---|---|
-| `tests_flight_row.py` | 69 | write modes, both tag ladders, closure guards, shared crew, retention |
-| `tests_poller_end_to_end.py` | 47 | full flight gate-to-gate, scripted ADS-B feed |
-| `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
-| `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
-| `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 673 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
-| `tests_regression_matrix.py` | 761 | every page x 6 odd states x 2 themes x 2 clocks, pilot and viewer |
-| `tests_app_shell.py` | 200 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
-| `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
-| `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
-| `tests_import_merge.py` | 43 | additive import, month scoping, future-only reconciliation, the diff, manual add |
-| `tests_test_mode.py` | 133 | simulator isolation (no spend, no ADS-B, no real writes), each scenario, admin promotion + password gate, the one-aeroplane rule |
+**Next: N4 follow-through and P0-7.** The remaining gate on anybody else
+using this app is the PARSER — see ROADMAP P0-7. Everything else on the
+list is polish by comparison.
 
 ## OPEN
 
-
-- **Viewer preferences still live in cookies.** They are per-device, which
-  is correct for a group share and wrong for a new phone: clear the browser
+- **`app/main.py` is ~3,300 lines.** It was ~1,300 when this line first
+  said it needed auditing. It holds routes, rendering, four separate view
+  builders and the diagnostics generator. Nothing in it is wrong that is
+  known, and all routes return 200, but it is the one file where a
+  change cannot be reasoned about locally. The natural seam is the view
+  builders (`build_plan_rows`, `build_flight_list`, `leg_view`,
+  `build_diagnostics_html`), which are pure functions of a row and could
+  move to `view.py` without touching a route.
+- **Viewer preferences still live in cookies.** Per-device, which is
+  correct for a group share and wrong for a new phone: clear the browser
   or replace the handset and everything chosen is silently gone. Storing
   them against the invite row would fix the new phone and BREAK the group
-  share — one row per code, so five people on one link would overwrite each
-  other. The shape that serves both is a preference row keyed to (invite,
-  device), where a device with no row yet inherits from the most recently
-  used device on that invite. Owner is aware; deferred deliberately until
-  the papercut is felt.
-- **Only the pilot ever tests the pilot's app.** The settings tab sent
-  every viewer to a login screen for an unknown length of time, and it took
-  a family member saying so to find it. Nothing in the suite covers "what a
-  viewer sees when they tap each tab" as a walk-through; the regression
-  matrix checks viewers are kept OUT of pilot pages, which is the same
-  fact from the side that cannot notice this.
+  share — one row per code, so five people on one link would overwrite
+  each other. The shape that serves both is a preference row keyed to
+  (invite, device), where a device with no row yet inherits from the most
+  recently used device on that invite. Deferred deliberately until the
+  papercut is felt.
+- **Nothing walks a VIEWER through the app.** The regression matrix
+  checks viewers are kept OUT of pilot pages, which is the same fact from
+  the side that cannot notice a viewer being bounced to a login screen —
+  which is what happened for an unknown number of releases in 1.25.1.
+  1.30.0 gives viewers a way to REPORT that class of bug, which is a
+  mitigation and not a fix: it still depends on somebody bothering.
 - **The pilot's name is nowhere the family can see it.** 1.25.0 added a
   personal-information group but deliberately left OUT a display name: a
-  name field that renders nowhere is dead weight, and the place it belongs
-  is the header a viewer sees — "Dave's flights" rather than "MyPilot".
-  That means editing `viewer.html`, which invariant 32 says to touch
-  surgically and which has silently lost code twice. It also appears on
-  five templates, so invariant 27 applies: fix all five or none. Worth
-  doing as its own change, not bolted onto a settings rebuild.
-- **The grouped list is only on settings.** `.glist` / `.grow` / `.seg`
-  were built as reusable components in `app.css` for exactly this reason,
-  but the calendar and flights pages still wear the old look. Settings was
-  the agreed test bed; rolling it outward is the next visual step.
+  name field that renders nowhere is dead weight, and the place it
+  belongs is the header a viewer sees — "Dave's flights" rather than
+  "MyPilot". That means editing `viewer.html`, which invariant 32 says to
+  touch surgically and which has silently lost code twice. It also
+  appears on five templates, so invariant 27 applies: fix all five or
+  none.
+- **The grouped list has reached settings and admin, not the rest.**
+  `.glist` / `.grow` / `.seg` are shared components in `app.css` and now
+  dress two pages. The calendar and flights pages still wear the old
+  look. Rolling it outward is the next visual step, and it is now a
+  copy-the-pattern job rather than a design one.
 - **`accentColour()` exists twice**, once per map template, because
   Leaflet cannot read a CSS variable. Invariant 27 applies until P0-6
   moves viewer.html's inline JavaScript into a file — adding a third home
   for script before then would make P0-6 harder, not easier.
-- **AeroAPI field mapping verified only against a synthetic record.** Wiring
-  confirmed end-to-end (gates, times, tail, Delayed pill all land). If
-  FlightAware renames a field the failure is SILENT — data just never
-  appears. Verify on the box: `python check_aeroapi.py <key> ENY3729 DFW OKC`.
-- **v5.1 not yet run on real hardware.** Sandbox only. Back up
-  `data/flighttracker.db` before first `update.sh`.
+- **AeroAPI field mapping verified only against a synthetic record.**
+  Wiring confirmed end-to-end (gates, times, tail, Delayed pill all
+  land). If FlightAware renames a field the failure is SILENT — data just
+  never appears. Verify on the box:
+  `python check_aeroapi.py <key> ENY3729 DFW OKC`.
 - `/account/usage` response shape unverified against the live endpoint.
   `refresh_usage()` logs an unrecognised shape rather than reporting zero
   spend; grep container logs for it.
-- `app/main.py` ~1300 lines, edited surgically in v5.0/v5.1; not fully
-  audited. All routes return 200 and all tests pass.
-- Tune AeroAPI spend toward the $5 free credit. ~46 legs/month × ~5 queries
-  ≈ $1.25; worst case ≈ $2.00. Headroom exists.
+- Tune AeroAPI spend toward the $5 free credit. ~46 legs/month × ~5
+  queries ≈ $1.25; worst case ≈ $2.00. Headroom exists.
 - Distribution undecided. Airplanes.live is non-commercial; AeroAPI
-  Personal tier is personal-use only.
-### CLOSED since this list was last edited ✅
+  Personal tier is personal-use only. This is a hard legal gate in front
+  of any paid tier, not a detail. See ROADMAP T2.
 
-Verified in the v7.4 tree, listed here so nobody "fixes" them twice:
+### Closed, and listed so nobody fixes them twice ✅
 
-- **One shared palette — DONE.** `static/app.css` now holds the only copy
-  and all ten templates link it. Its header comment documents the
-  `data-theme` vs `prefers-color-scheme` precedence rule; the
-  `:not([data-theme])` guard on the media query is load-bearing and
-  explained there.
-- **Light theme on the auth pages — DONE.** Handled by the same file.
-- **Bottom tab bar — DONE.** `<nav class="tabbar">` on all four logged-in
-  pages (viewer, calendar, admin, settings), pilot-only entries gated on
-  `is_pilot`. See the caveat in ROADMAP P0-4: the links are plain `<a
-  href>`, so every tap is still a full page load.
+- ~~**Import REPLACES the roster.**~~ **CLOSED 1.5.0**, tightened in
+  1.20.0/1.22.0, and the review page rebuilt in 1.30.0.
+- ~~**One share code per pilot.**~~ **CLOSED 1.23.0** by N4.
+- ~~**Settings lived at two URLs.**~~ **CLOSED 1.25.2.**
+- ~~**No way to report a bug.**~~ **CLOSED 1.30.0**, for viewers too.
+- ~~**The admin page takes tens of seconds to open.**~~ **CLOSED 1.30.0.**
+- ~~**v5.1 not yet run on real hardware.**~~ It has been flying real
+  trips for twenty-five releases.
 
-- **Service worker — DONE (1.0.0).** `static/sw.js`, served from `/sw.js` so
-  its scope is the whole origin. Cache name keyed to VERSION.
-- **Manifest and theme-color on every page — DONE (1.0.0).** Via
-  `templates/partials/app_shell.html`, included by all ten templates and
-  enforced by `tests_app_shell.py`. The manifest is now a ROUTE
-  (`/manifest.webmanifest`), generated per user so the icon choice applies.
-- **`theme_color` mismatch — DONE (1.0.0).** Now `#0f1419`, matching `--bg`.
-- **Carrier trademarks — DONE (1.0.0).** Renamed to MyPilot throughout;
-  callsign prefixes moved to `app/carriers.py` as configuration. A regression
-  guard scans templates and static files for the old names.
-- **API versioning — DONE (1.0.0).** `/api/v1/…` with the bare paths kept as
-  aliases.
-- **Retention — DONE (1.0.0).** 30 days → 365, in `flights.py` and
-  `track.py` together, `PT_RETENTION_DAYS` overridable. See BACKUP.md: this
-  is the release where the database stopped being disposable.
-- **Offline/connection state — DONE (1.0.0).** Three distinguished states,
-  driven by real poll outcomes rather than `navigator.onLine`.
+## NEXT UP
 
-### STILL OPEN — verified against the v1.0.0 tree ✅
+**The N-list is finished.** N1 (additive import) shipped in 1.5.0 and was
+tightened in 1.20.0, 1.22.0 and 1.30.0. N4 (named invites) shipped in
+1.23.0, reduced in scope by the owner. N2 and N3 (logbook view, CSV
+export) were CUT in 1.22.0 — they are a different product, a legal-record
+and pay tool aimed at the pilot, bolted onto an app whose purpose is
+letting a family see where he is. N5 was found in 1.24.4 to be describing
+an app that no longer existed, and was descoped to a single settings
+toggle.
 
-- **1,376 of viewer.html's 2,333 lines are inline `<script>`.** This is the
-  mechanism behind the recurring "viewer.html silently loses JavaScript"
-  failure documented in NOTES — layout edits and logic edits collide
-  because they live in one file. See ROADMAP P0-6.
-- **Cookie-auth only** — no bearer tokens. See MIGRATION AND FUTURE-PROOFING.
-- **API returns presentation, not facts.** `/api/selected` emits
-  `dep_line`, `arr_line`, `dep_shown`, `ete`, `status` as pre-formatted
-  display strings, and takes `time_format` ("12"/"24") as an argument so
-  the SERVER does the formatting. Only `enriched_at_iso` and
-  `last_signal_iso` send a machine-readable value. Any non-browser client
-  is blocked on this. See ROADMAP P1-1.
-- **Schedule import has only ever been fed one carrier's FFDO lines.** This is the
-  gate on every other person using the app, and it is not a UI problem.
-  See ROADMAP P0-7.
-- ~~**Import REPLACES the roster rather than adding to it.**~~ **CLOSED in
-  1.5.0** by N1, and tightened since: 1.20.0/1.22.0 froze flown legs
-  against re-import entirely, and the review page decides removals rather
-  than the paste doing it silently. Left listed, struck through, because
-  this bullet was the stated blocker on the app being a record rather than
-  a rolling window, and that is worth being able to see was cleared.
-- ~~**One share code per pilot.**~~ **CLOSED in 1.23.0** by N4, reduced in
-  scope by the owner: named invites, per-person removal, expiry dates and
-  last-seen. No global pause switch and no per-code dialog — see 1.24.0.
-- **No self-service account deletion.** `settings.html` has admin-deletes-
-  a-user only (`/settings/users/delete/{user_id}`). Apple requires an
-  in-app deletion path for any app offering account creation, and it is
-  correct regardless. See ROADMAP P0-9.
-- **AeroAPI Personal tier is personal-use only; community ADS-B feeds
-  (adsb.lol, adsb.fi) are non-commercial.** airplanes.live already
-  withdrew access. Neither permits charging money. This is a hard legal
-  gate in front of any paid tier, not a detail. See ROADMAP T2.
+The plans themselves are in VERSION HISTORY at the entries above. They are
+not restated here, because a finished plan kept beside a live one is how
+1.24.4 happened: N5 sat unread for twenty-one versions and was still being
+quoted back as the next step.
 
-## NEXT UP — the agreed build order
+**Two lessons from that list are worth keeping, and they are why this
+section is now four paragraphs instead of two hundred lines:**
 
-**SCOPE CUT, 1.22.0 (owner).** N2 (logbook view) and N3 (CSV export) are
-DROPPED, along with the pay calculator that was recorded against N3 in
-1.20.0. They are a different product: a legal-record/pay tool aimed at
-the pilot, bolted onto an app whose whole purpose is letting a family see
-where he is. Keeping them on the roadmap was quietly shaping decisions
-here — the deadhead carve-out in 1.20.0's import rules existed only to
-serve a logbook, and dropping it made the import rule a single sentence
-instead of a sentence with an exception.
+1. **A plan nobody re-reads stops describing the app, while still being
+   followed.** Re-read a spec against the code before acting on it, every
+   time. N5's four bullets asked for three things that had already been
+   built and one the owner did not want.
+2. **Cutting a feature nobody is building still changes decisions.** The
+   deadhead carve-out in 1.20.0's import rules existed only to serve a
+   logbook. Dropping the logbook turned that rule from a sentence with an
+   exception into a sentence.
 
-The retained numbering is deliberate: N4 and N5 keep their names so the
-version history above, which refers to them by number, stays readable.
-
-What remains is the dependency chain from N1: flights accumulate rather
-than rolling over, so N4 and N5 both assume it.
-
-This section is the working plan. P0/P1 below remain the standing backlog.
-
----
-
-### N1 — additive import + manual remove ✅ DONE in 1.5.0
-
-**The problem.** `save_schedule` currently REPLACES a pilot's roster: any
-leg not present in the new paste has its roster row deleted. Pasting
-September therefore erases August from that pilot's view. Combined with the
-old 30-day retention this made the app a rolling window, which is exactly
-what a record cannot be.
-
-Note what is NOT broken: flight ROWS are shared and adopted, never
-duplicated (v5.1). Only the roster LINK is pruned. So this is a small
-change, not a rewrite.
-
-**The change.**
-- Prune only FUTURE roster entries. A re-paste is the pilot correcting what
-  is COMING; a leg that already departed happened, and an import must not
-  be able to revise history.
-- Import runs by MONTH. The paste declares which month it covers, and
-  reconciliation is scoped to that month — so importing September cannot
-  touch August even for future-dated legs.
-- Nothing is applied silently. `import_review.html` already exists; it
-  becomes a DIFF the pilot approves: added / removed / changed / unchanged.
-- Manual per-leg remove, and manual per-leg ADD. The add path is what
-  covers a diversion that continued to the original destination — a leg
-  that never existed in any bid line and never will.
-
-**Why a diff rather than a silent merge.** Two failures need catching and
-neither announces itself: a trip dropped from the line that the pilot
-forgot to remove, and a leg flown that was never on the line. The diff is
-the only point where a human can see both.
-
-**Decided (owner, 1.5.0):** a removed PAST leg is DELETED OUTRIGHT. The
-archive idea was rejected as a state nobody would ever look at — it buys a
-distinction ("did not fly" vs "never imported") that costs a column, a
-filter on every query that reads the roster, and a second meaning of
-"removed" in the UI. An import can never remove a past leg anyway, so the
-only way to reach this is a human deliberately deleting one.
-
-**As built.** `save_schedule` is renamed `replace_schedule` and is OFF the
-import path entirely — the rename is the fix, because the old name read as
-"save this" while the behaviour was "make the roster exactly this". Two new
-primitives replace it there: `merge_schedule` (add, remove nothing) and
-`remove_legs` (targeted, explicit). Both re-sequence the whole roster into
-departure order afterwards, because `sort_index` used to be the leg's
-position in the paste, which only works while the paste IS the whole
-roster. `app/importer.py` owns the diff and nothing else; the two scope
-rules live there with the reasoning attached.
-
-Also shipped alongside, because N1 is what makes them necessary — before
-this the roster could not exceed about a month:
-- **Month filter on the flights page.** Server-side, `?month=YYYY-MM`, with
-  a per-month count and an all-months option.
-- **Calendar shows ONE month at a time**, with prev/next and a picker. It
-  used to render every month that had data, stacked down one page; at
-  365-day retention that is a year of grids in one document.
-- **Per-leg drop on the review page**, on the same page as the trip breaks.
-  Dropping disables the row's inputs rather than deleting the row, so the
-  leg stays visible, struck through, and the choice is reversible.
-
----
-
-### N4 — per-viewer named invites ✅ DONE in 1.23.0 (reduced scope)
-
-**The problem.** One share code per pilot means the family is one
-undifferentiated blob. Revocation is all-or-nothing: cutting off one person
-logs out the spouse, the parents and every FO simultaneously. And a code is
-a bearer secret — whoever holds the text has a live position feed.
-
-**Why not require viewer accounts.** It would fix revocation and cost
-adoption. The person who most needs this app is the least likely to create
-an account and choose a password. Named invites get most of the security
-for none of the signup friction.
-
-**The change.** Codes move to their own table, one row per invite: name,
-code, created, last seen, optional expiry, revoked flag. Settings gets a
-panel listing active invites, with an add button opening a dialog for name
-and expiry, plus per-invite regenerate and revoke.
-
-Same code-generation logic as today. **New constraint: a new code may not
-collide with any other ACTIVE code**, across all pilots — two households
-must never share a code, and the check has to be against live codes rather
-than merely unique-per-pilot.
-
-**Also:** a global pause-sharing switch. Crew on days off may not want a
-live feed running at all.
-
----
-
-### N5 — viewer-side framing ⚠️ MOSTLY ALREADY BUILT / DESCOPED (1.24.4)
-
-**Checked against the running app at the owner's prompting, and most of
-this spec describes work that has since been done by other releases.** It
-was written in 1.3.1 and not re-read for twenty-one versions. Recorded
-here rather than quietly deleted, because the useful lesson is that a
-plan left unread for that long stops describing the app.
-
-Bullet by bullet:
-
-- ~~Surface the pickup details already stored — gate, terminal, baggage.~~
-  **ALREADY SHOWN.** Gate appears twice on the tracker: as a badge on each
-  `.aptblock` (`v-dep-gate` / `v-arr-gate`) and again in the detail rows,
-  where terminal and baggage ride with it. 1.12.1 deliberately CUT the
-  terminal line and baggage badge from the strip as clutter — owner's
-  call — so this bullet was asking for something that had been built and
-  then trimmed on purpose.
-- ~~A landed-safe history: the last few arrivals, with times.~~ **ALREADY
-  SHOWN.** `PHASE_ARRIVED` tags a finished leg, past legs of the current
-  trip stay in the list until they settle out (1.17.0), and the calendar
-  has been the history browser since 1.18.0 with actual times, delays and
-  the flown track.
-- ~~Trip-level framing: "away until Thursday · 2 legs left".~~ **NOT
-  WANTED** (owner, 1.24.4).
-- ~~Arrival time in the VIEWER's timezone rather than the destination's.~~
-  **NOT AS A DEFAULT** (owner, 1.24.4). The destination zone is the right
-  answer: it is the clock the pilot is living on and the one written on
-  every gate board. A SETTINGS TOGGLE is the surviving idea, and it is a
-  small one — the viewer already has its own theme and clock-format
-  preferences in cookies, so this is a third of the same kind.
-
-**Template split: no longer forced.** The split was justified by N5's
-behaviour changes. With those gone, splitting `viewer.html` would be
-refactoring for its own sake, and this file's own history says that is
-how JavaScript silently goes missing. Do it when a change needs it.
-
-**P0-6 accordingly drops from prerequisite to housekeeping.** Extracting
-the inline script still has value — a template cannot be cached or
-syntax-checked as a script can — but the sequencing note that made it
-urgent was pointing at a split that is not happening.
-
-### What this sequence deliberately does NOT do
-
-- **No native client work.** The on-ramp (P1) is being laid as normal
-  iteration; the client itself waits for trigger T2.5.
-- **No push notifications.** P1-6 records the events; delivery needs a
-  host that is always up (T1) and a store presence (T2.5).
-- **No payment or hosting work.** Those are trigger-gated below and none of
-  the triggers have fired.
-
----
+**What is actually next: ROADMAP P0-7, the parser.** Until an FO at
+another airline can paste a bid line and have it parse, this is the
+owner's app rather than a product, and everything else on the list is
+polish by comparison. P0-4 (tab taps reloading the page) and P0-6
+(viewer.html's inline script) remain the clearest "this is a website"
+tells.
 
 ## ROADMAP
 
@@ -407,10 +194,15 @@ that test, it is premature.
 
 ### P0 — free, small, do first
 
-**Items 1, 2, 3 and 5 shipped in 1.0.0.** Item 4 is partly done: the tab bar
+**1, 2, 3 and 5 shipped in 1.0.0.** Item 4 is partly done: the tab bar
 existed already (built in the undocumented v6.x–v7.x range), but its links
-are still plain `<a href>`, so every tap is a full page load. That remains
-the clearest "this is a website" tell.
+are still plain `<a href>`, so every tap is a full page load. That is now
+the oldest thing on this list and the clearest "this is a website" tell.
+
+**Item 9 is half closed by 1.30.0.** Account deletion itself is still
+open, but the underlying hole — no route from the person using the app to
+the person who runs it — is not: anyone signed in, viewer included, can
+now report a problem.
 
 Ordered by perceived-quality gain per hour spent.
 
@@ -662,15 +454,41 @@ Listed so nobody "discovers" them as oversights:
 
 ## DATA MODEL
 
-Four tables in `data/flighttracker.db`. Was seven before v5.0.
+Seven tables in `data/flighttracker.db`. Was seven before v5.0, four
+after it, and the three that came back each came back for the same reason.
 
 ```
-users     accounts, prefs, AeroAPI key, spend counters
-flights   ONE ROW PER REAL-WORLD FLIGHT. SHARED. Not user-scoped.
-          id = DATE-FLIGHTNUM-ORIGIN-DEST
-roster    (user_id, flight_id) + sort_index, is_deadhead, trip_start
-positions breadcrumb trail, keyed by flight id
+users        accounts, prefs, AeroAPI key, spend counters
+flights      ONE ROW PER REAL-WORLD FLIGHT. SHARED. Not user-scoped.
+             id = DATE-FLIGHTNUM-ORIGIN-DEST
+roster       (user_id, flight_id) + sort_index, is_deadhead, trip_start
+positions    breadcrumb trail, keyed by flight id
+share_codes  one row per invite                              (1.23.0)
+reserve_days hand-entered reserve, per (user, date)          (1.29.0)
+feedback     bug reports and ideas, and their state          (1.30.0)
+
+app_meta     installation key/value: session key, ADS-B feed list,
+             recent lookup history, schema version
+debug_events the decision log. A RING BUFFER, self-trimming at 20,000
 ```
+
+**THE LAST THREE ARE SEPARATE TABLES FOR ONE REASON**, worth stating once
+rather than three times. Each was first proposed as a column on `users`.
+A column holds ONE value, so the second invite, the second reserve day and
+the second bug report would each have destroyed the first — and in every
+case what is destroyed is the only copy. See invariant 41.
+
+`reserve_days` has a second reason on top: living outside `flights` is
+what makes it survive an import without anyone having to remember to
+preserve it. Its module docstring is the best-documented thing in the
+1.26–1.29 range and is the model for what the rest of that range should
+have done.
+
+`feedback` also could not reuse `debug_events`, the nearest existing
+table. That one is a ring buffer whose retention is deliberately NOT tied
+to `PT_RETENTION_DAYS`, because diagnostics are disposable. A bug report
+is not: it is the only copy of something a person took the trouble to
+write down, and a busy night of polling must not push it out.
 
 **Split rule:** facts about the AEROPLANE → `flights`. Facts about a
 PERSON'S RELATIONSHIP to it → `roster`. Deadheading is the canonical case:
@@ -940,6 +758,75 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     worse than a wrong hue. Two copies, one per map template; invariant 27
     applies until P0-6 gives them a shared script file. (1.25.0)
 
+37. **A route that touches the network is `def`, never `async def`.** Every
+    route in `main.py` is `async def`, which is correct while they only
+    read SQLite. `/admin` was not: it built the diagnostics panel inline,
+    which probes every feed through a 1.2-second throttle and fires an
+    uncached lookup per open leg. An `async def` runs ON the event loop, so
+    `time.sleep()` and a blocking `requests.get()` did not merely delay
+    that response — they stopped the server. A family member's tracker
+    polling during a flight hung for as long as the admin page took to
+    open. Starlette runs a plain `def` in a worker thread instead. The
+    test to apply: if a handler can block for longer than a frame, it must
+    not be `async`. (1.30.0)
+
+38. **An empty list is an ANSWER. Never collapse one with `or`.**
+    `data.get("ac") or data.get("aircraft")` turned "no aircraft on that
+    callsign right now" into "this feed speaks a different format", and
+    reported healthy feeds as broken in red for most of every day — while
+    the identical empty answer under the other key passed, because
+    `None or []` is `[]`. Use `is None` wherever absence and emptiness
+    mean different things, which in this app is everywhere: the whole
+    design distinguishes "nothing was reported" from "nothing happened".
+    (1.30.0)
+
+39. **A control's gate goes on the ROUTE, not on the page that links to
+    it.** `POST /admin/diagnostics/endpoints` checked only that you were a
+    pilot, while its own sibling reset route checked `is_admin`. Nothing
+    legitimate ever reached it without the flag, because the only link is
+    on an admin-only page — which is exactly why it survived. A form is
+    reachable by anyone who can type its path. When adding a route beside
+    an existing one, read the existing one's guard rather than the page
+    they share. (1.30.0)
+
+40. **A page must not be held up by its slowest section.** /admin has five
+    sections; four are database reads and one talks to the internet. Built
+    together, the four instant ones waited on the slow one and the page
+    took tens of seconds. Fetch the slow section separately and let the
+    page draw. Fetch it ONCE, on first open — re-probing on every toggle
+    of a disclosure triangle is what got the probe rate-limited in 1.8.0 —
+    and give the failure path something to say, because this is the panel
+    people read when something is already broken (invariant 23). (1.30.0)
+
+41. **A record a human typed goes in its own table, and never in a ring
+    buffer.** `share_codes`, `reserve_days` and `feedback` were each
+    proposed as a column on `users`. A column holds ONE value, so the
+    second invite, the second reserve day and the second bug report would
+    each have destroyed the first — and in every case what is destroyed is
+    the only copy. `feedback` additionally could not live in
+    `debug_events`, which self-trims at 20,000 rows because diagnostics
+    are disposable; a busy night of polling must not be able to delete
+    something a person wrote by hand. (1.30.0)
+
+42. **When one fact is decided twice, declare it once as DATA.** The
+    import review's six row states each have a default, and two of them
+    are deliberately OPPOSITE (an upcoming leg the paste omits leads with
+    remove; a flown one leads with keep). Written as branches in the
+    template they would have to be repeated in the summary count and in
+    the page's script, and the three would drift. `PLAN_DEFAULT_ON` is one
+    dict that all three read. This is invariant 27 applied to behaviour
+    rather than to markup. (1.30.0)
+
+43. **A form submits by what is ENABLED, so "skip this" needs no server
+    support.** The review page offers six different decisions per row and
+    the confirm route still has two jobs, because a row switched off has
+    its inputs disabled and a disabled input is not submitted by any
+    browser. That is also what made declining a retime possible with no
+    new field and no second code path: the leg never reaches
+    `merge_schedule`, and `merge_schedule` only writes what it is given.
+    Before reaching for a per-row flag, check whether absence already says
+    it. (1.30.0)
+
 ## MODULE MAP
 
 ```
@@ -958,8 +845,17 @@ db.py           schema + migrations (v4 and v5.0 -> v5.1)
 schedule.py     past/current/upcoming split, and which leg is live
 simulator.py    test mode. Produces POSITIONS only; the app judges them.
 importer.py     what a paste would CHANGE. Describes, never applies.
+                build_diff categorises; build_plan orders the result into
+                the single list the review page draws.
+feedback.py     bug reports and ideas, and the admin inbox
+reserve.py      hand-entered reserve days, in a table import cannot reach
+radar_proxy.py  weather tiles, fetched and filtered server-side
+debuglog.py     the decision log. A ring buffer; disposable by design.
 parser.py models.py auth.py settings.py airports.py geo.py ratelimit.py
 templates/viewer.html   the app (65KB, edit surgically)
+static/app.css  THE palette, .fstrip, and the .glist/.grow row components
+                that settings and admin both wear
+static/basemap.js   the shared map base, read by both map templates
 ```
 
 ## THE TWO PILLS
@@ -1210,7 +1106,7 @@ without knowing what else is left. Applied AFTER `tracker_window`, so
 | `/` | the tracker card and map | pilot + viewers |
 | `/calendar` | one month at a time | pilot + viewers |
 | `/flights` | ONE PILOT'S SCHEDULE — paste, leg list, month filter | pilot |
-| `/admin` | THE INSTALL — people, test mode, diagnostics, decision log | admins |
+| `/admin` | THE INSTALL — inbox, people, test mode, diagnostics, decision log | admins |
 | `/settings` | how the app behaves for you | pilot + viewers |
 
 **The `/flights` and `/admin` split is 1.7.0 and it was a real confusion,
@@ -1219,6 +1115,15 @@ v7.5 while its URL said `/admin`; 1.6.0 then piled the install's
 administration onto that same page, so somebody's trip list and the control
 that deletes every account were in one scroll under a name that matched
 neither. Now the word means what it says.
+
+`/admin`'s Live-tracking section is FETCHED, not rendered with the page:
+`GET /admin/diagnostics/panel` returns just that markup. It is the only
+route in the app that makes outbound network calls while somebody waits,
+and the only one deliberately declared `def` rather than `async def` —
+see invariant 37.
+
+Feedback adds `POST /feedback` (anyone signed in, pilot or viewer) and
+three admin routes under `/admin/feedback/`.
 
 Redirects are kept for every moved URL — `/admin/diagnostics` →
 `/admin#diagnostics`, `/admin/debug` → `/admin#log`,
@@ -1750,19 +1655,39 @@ v4`, or `merged N per-user v5.0 rows into shared flights`.
 ## TESTS
 
 ```bash
-python tests_flight_row.py          #   69
-python tests_poller_end_to_end.py   #   47
-python tests_past_leg_detail.py     #   19
-python tests_budget_limit.py        #   17
-python tests_carrier_cap.py         #   13
-python tests_ui_fixes.py            #  819
-python tests_app_shell.py           #  204
-python tests_timezones.py           #   68
-python tests_closeout_sweep.py      #   42
-python tests_import_merge.py        #   43
-python tests_test_mode.py           #  133
-python tests_regression_matrix.py   #  768
-```                                  # 2242
+python tests_flight_row.py          #    69
+python tests_poller_end_to_end.py   #    47
+python tests_past_leg_detail.py     #    19
+python tests_budget_limit.py        #    17
+python tests_carrier_cap.py         #    13
+python tests_ui_fixes.py            #   836
+python tests_app_shell.py           #   211
+python tests_timezones.py           #    68
+python tests_closeout_sweep.py      #    42
+python tests_import_merge.py        #    43
+python tests_test_mode.py           #   136
+python tests_regression_matrix.py   #   768
+```                                  #  2267
+
+| Suite | Covers |
+|---|---|
+| `tests_flight_row.py` | write modes, both tag ladders, closure guards, shared crew, retention |
+| `tests_poller_end_to_end.py` | full flight gate-to-gate, scripted ADS-B feed |
+| `tests_past_leg_detail.py` | past-leg + T-30 preview rendering |
+| `tests_budget_limit.py` | monthly spend cap at its enforcement point |
+| `tests_carrier_cap.py` | deadhead lookup cap, placeholder filter |
+| `tests_ui_fixes.py` | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, the import plan page, month filter, calendar month nav |
+| `tests_app_shell.py` | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand, every form action resolving to a real route |
+| `tests_timezones.py` | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
+| `tests_closeout_sweep.py` | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
+| `tests_import_merge.py` | additive import, month scoping, future-only reconciliation, the diff, manual add |
+| `tests_test_mode.py` | simulator isolation (no spend, no ADS-B, no real writes), each scenario, admin promotion + password gate, the one-aeroplane rule, the diagnostics panel |
+| `tests_regression_matrix.py` | every page x 6 odd states x 2 themes x 2 clocks, pilot and viewer |
+
+THE COUNTS LIVE IN ONE PLACE, above. They used to be here AND in a table
+in STATE, and the two disagreed by the time anyone checked — the same
+shape of problem as the version number in the header, and as the three
+declared defaults for `poll_seconds` in 1.25.0.
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1829,6 +1754,229 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.30.0 — the app was fine; the things around it were not
+
+Three problems, all of them about OPERATING this install rather than
+about tracking flights, plus three bugs found on the way.
+
+**THE PROBE REPORTED HEALTHY FEEDS AS BROKEN, in red, most of the day.**
+Reported as "on some APIs I am getting HTTP 200 errors", which is exactly
+what it looked like. `airplaneslive.probe` read
+
+    ac = data.get("ac") or data.get("aircraft")
+
+and an empty list is falsy. So a feed answering "nobody is flying that
+callsign right now" — a correct, ordinary answer — fell through to the
+second key, got `None`, and was reported as *"no 'ac' list, different API
+format"*. The probe callsign is AAL100, ONE daily transatlantic flight,
+so for most of any given day the honest answer IS an empty list.
+
+It was inconsistent in a way that made it harder to recognise: a feed
+keying its empty list under `aircraft` PASSED, because `None or []` is
+`[]`, while the identical answer under `ac` failed. Same emptiness, two
+verdicts, decided by a key name.
+
+And it was not cosmetic. That verdict feeds the working-feed count, so
+enough quiet feeds produced **"No enabled feed is answering"** — a red
+alarm about an app that was tracking flights perfectly well. Invariant 23
+again: the diagnostics were the broken thing.
+
+**THE ADMIN PAGE FROZE THE WHOLE SERVER WHILE IT LOADED.** Reported as
+"takes a long time". The slowness was the visible half.
+
+`build_diagnostics_html` ran inline during the page render, and it is the
+only thing in this app that makes outbound calls while somebody waits. It
+probed every configured feed — including DISABLED ones, so the default
+install paid airplanes.live's full timeout on every load to rediscover a
+403 it had been told about — and each probe sleeps to hold
+`livesource`'s 1.2s floor. Then it fired an UNCACHED lookup per open leg.
+Five seconds quiet; half a minute with a bad feed and two active legs.
+
+The route was `async def`, like every route in this file. That is right
+for the ones that only touch SQLite and was badly wrong here: an
+`async def` runs ON the event loop, so `time.sleep()` in the throttle and
+a blocking `requests.get()` did not merely delay this response, they
+stopped the server. **A family member's tracker polling during a flight
+hung for as long as the admin page took.** That is the part that
+mattered, and nothing in the report could have said so.
+
+Three fixes. The panel is fetched separately (`/admin/diagnostics/panel`)
+so the page draws immediately; disabled feeds are not probed; and that
+one route is a plain `def`, so Starlette runs it in a worker thread.
+Measured against a stubbed 0.2s-per-request network: `/admin` went from
+seconds to **0.01s**, with the panel arriving underneath in 1.5s.
+
+The panel is fetched ONCE, on first open, and re-opening the row does not
+re-probe. Hammering the feeds by tapping a disclosure triangle is exactly
+what got the old probe rate-limited in 1.8.0.
+
+**A NON-ADMIN COULD REWRITE THE INSTALL'S ADS-B FEED LIST.**
+`POST /admin/diagnostics/endpoints` checked `require_pilot` only, while
+its own sibling `/admin/diagnostics/endpoints/reset`, two functions
+below, checked `is_admin`. On a shared install any FO with an account
+could point every feed somewhere that answers nothing and take live
+tracking down for everybody. The page it posts from is admin-only, which
+is precisely why it went unnoticed — nothing legitimate ever reached it
+without the flag. Second reason it belongs behind that gate: the value
+saved is a URL this server then fetches on a schedule from inside a home
+network.
+
+---
+
+**FEEDBACK AND BUG REPORTS EXIST, AND VIEWERS CAN FILE THEM.** New
+`feedback` table, one form in Settings, an inbox on /admin.
+
+Its own table, not a column on `users`, for the reason `share_codes`
+needed one in 1.23.0: a column holds one value, so a second report would
+destroy the first, and losing a report is the one thing an inbox must not
+do. Not `debug_events` either — that is a ring buffer that self-trims at
+20,000 rows because diagnostics are disposable, and a busy night of
+polling must not be able to push out the only copy of something a person
+wrote by hand.
+
+**The viewer half is the point, not a courtesy.** This file has carried
+"Only the pilot ever tests the pilot's app" as an open problem for
+several releases. 1.25.1's settings-tab bug bounced every viewer to a
+login screen for an unknown number of releases and was found because a
+family member happened to mention it out loud. There was no route from
+the person using the app to the person who can fix it. A viewer has no
+account, so the row records the PILOT they are watching — which is what
+routes it to the right inbox — and the invite NAME they logged in under,
+which is what the pilot knows them by. Never the code: that is a live
+credential and must not be written into a table an admin reads casually
+or downloads as a text file.
+
+**ONE FORM FOR BUGS AND IDEAS**, with a kind picker, not two rows in the
+list. Splitting them would make the reporter classify their own problem
+before describing it, and the commonest report — "this looks wrong, is
+that a bug or am I being thick?" — does not classify cleanly.
+
+**The build and the device are read SERVER-SIDE**, from `VERSION` and the
+User-Agent header, never from hidden fields. A hidden field carries
+whatever the page was rendered with, and the single commonest failure in
+this app's history is a phone serving the PREVIOUS release's markup. A
+stale page would have reported a stale version, which is exactly the case
+where the version is the whole answer. The inbox flags a report whose
+build is not the running one.
+
+**THE ADMIN PAGE IS THE GROUPED LIST NOW.** Same `.seclabel` / `.glist` /
+`.grow` components settings has used since 1.25.0, from `app.css` — the
+shared definition, not a copy, which is the whole reason they were put
+there. It was the last page wearing the old stacked-cards look and also
+the longest page in the app: four sections that each wanted reading top
+to bottom, all open at once, on a phone. Collapsed rows that state their
+own value fix both, and `<details>` opens with no JavaScript (invariant
+16), which matters on a page you reached BECAUSE something is broken.
+
+Inbox is first and opens itself when there is something unread. It is the
+only section here that somebody else can put something into; everything
+below it is a thing the admin goes looking for. A message nobody notices
+is the same as no message.
+
+**The feeds editor stopped being a table.** Four columns, two of them
+text inputs, is what made the admin page scroll sideways on a phone —
+and a table that CAN overflow will always choose to overflow before it
+wraps. Stacked blocks now. The three CSS rules that had been holding the
+old table's inputs in place, including a `min-width: 0 !important`, went
+with it; they were covering for the layout rather than fixing it.
+Recent lookups moved into a `<details>` with the score in its summary.
+
+The generated markup also stopped emitting hardcoded light-theme greys
+and string-replacing them for palette variables on the way out. It emits
+the page's own classes, so the only way to know what a colour will be is
+no longer to read a substitution table at the bottom of a 200-line
+function.
+
+---
+
+**THE IMPORT REVIEW SHOWED EVERY FLIGHT TWICE.** Reported as "I am
+confused on how it is now", and the confusion was the page's fault.
+
+Four read-only summaries at the top (added / times changed / no longer on
+the line / already flown) and a COLLAPSED section at the bottom called
+"Trip breaks & full list" — which was the actual form. The hidden fields
+that get imported, the X that drops a leg and the trip breaks all lived
+in there. So wanting to drop a flight shown under "Being added" meant
+knowing to open a section at the bottom, finding the same flight a second
+time, and using a different control on it. The one you were looking at
+was a picture.
+
+Two consequences beyond the confusion, and the second is a missing
+capability rather than a presentation fault:
+
+  * **Trip breaks were invisible while reading the diff**, which is the
+    only moment their placement can be judged.
+  * **A retimed leg could not be declined.** The diff said "times
+    changed", the pilot approved, and the new times were applied because
+    the leg was in the paste. There was no way to say "keep what I have"
+    short of editing the text before pasting it.
+
+**Now: one list, in departure order, every flight exactly once**, with a
+badge saying what will happen and one button to change it. Six states —
+`new`, `retimed`, `same`, `flown`, `gone`, `gone_flown` — built by
+`importer.build_plan`, which derives them from `build_diff` rather than
+beside it. A second implementation of the categorisation rules is how the
+page and the merge came to disagree in 1.20.0.
+
+Trip breaks sit in the same list between the flights they separate,
+**with the rest gap printed beside them** — "38h off". That is the fact
+the decision actually turns on, and the old page asked for the judgement
+while showing only flight times. Rows with no break print the gap too,
+with a link to start a trip there, so you can see where one might belong
+without adding it to find out.
+
+**Declining a retime needed no server change at all**, and that is worth
+recording because it is why the fix is small. A row is switched off by
+DISABLING its inputs, and a disabled input is not submitted by any
+browser — so the leg never reaches `merge_schedule`, and `merge_schedule`
+only ever writes the legs it is given. The row already on the roster
+keeps its times by being left alone. Six decisions on the page; two jobs
+on the server, unchanged.
+
+The honest cost, stated on the page: declining a retime declines the
+whole ROW, including any trip break moved onto it, because the row is
+what carries both.
+
+**The opposite defaults on the two kinds of removal are unchanged and
+still load-bearing** (1.20.0/1.21.0). `gone` leads with remove because
+the paste contradicts it; `gone_flown` leads with keep because the paste
+is merely silent, which is the ordinary result of pasting one trip. They
+are declared once as data (`PLAN_DEFAULT_ON`) rather than as branches in
+a template, so the page and the summary cannot disagree about what a row
+means. There is now a test asserting BOTH defaults — one that checked
+only `gone_flown` would pass on a page that had quietly made them the
+same.
+
+**Three mistakes of my own, all caught before shipping:**
+
+- Rows at their default rendered struck through. `off` means "moved AWAY
+  from this row's default", and I derived it from `default_on`, which
+  struck through every already-flown row on arrival — reading as "this is
+  being deleted" when the truth is the exact opposite.
+- I dropped the 1.21.0 "Remove all / Keep all" bulk control without
+  meaning to. Putting it back, I wired its listener to the list — but the
+  buttons live in the summary bar, OUTSIDE the list, so no click would
+  ever have reached them. That is precisely the bug 1.21.0 shipped and
+  caught, committed again while restoring the feature it was found in. It
+  has its own delegated listener, with the reason written above it.
+- `build_plan_rows` emitted a `date_iso` key nothing used, which broke a
+  test that locates the Flights table by searching for the FIRST
+  `"date_iso"` in main.py. The test is fragile; the dead key was mine.
+  Removed the key.
+
+---
+
+**Five tests were REWRITTEN, none deleted.** All five pinned markup from
+pages that have since been rebuilt, while the rules they defend survive
+intact — the trap already recorded above `test_zone_never_wraps_a_time`
+and in 1.25.0's rewrite of `test_settings_is_one_page`. Each carries a
+note saying what changed and why the rule still holds. Two got STRONGER
+in the process: the removal-defaults test now asserts both directions,
+and the width test now asserts the feeds editor is not a table at all
+rather than that its table was constrained.
+
+2242 → 2267 assertions.
 
 ### 1.25.2 — one settings URL
 
@@ -4020,6 +4168,35 @@ rather than the working tree, since a test run recreates both.
 Tests: 400 → **609**, six suites → seven (`tests_app_shell.py`). The 400
 figure in the old README was itself stale; the v7.4 tree already had 472.
 
+
+### 1.26.0 – 1.29.2 — NOT RECORDED, reconstructed by inspection
+
+**Five releases shipped without entries.** This is the second time — see
+v6.4–v7.4 below, which says the same thing about four earlier ones. What
+follows was recovered in 1.30.0 by reading the annotations those releases
+left in the code. It is a list of what they BUILT. Their REASONING is
+gone and is not recoverable from here.
+
+If you are about to change any of the following, read the code rather
+than this file, and do not assume a decision was arbitrary because the
+note explaining it is missing:
+
+| Version | Built, per annotations in the tree |
+|---|---|
+| 1.26.0 | The basemap moved into `static/basemap.js`, shared by both map templates, taking `tileTheme()` with it. Map attribution reinstated and fitted into a 150px box. A "one map at a time" rule on the calendar. |
+| 1.26.1 | Blank-line handling in the parser softened: a blank line became a HINT about a trip break rather than a verdict. |
+| 1.26.2 | Zoom buttons removed from the tracker map — pinch and double-tap already zoom on a phone. |
+| 1.27.x | No annotations survive. 1.27.2 made the tracker topbar "a label, not a lid". |
+| 1.28.0 | `app/radar_proxy.py` — the weather radar moved off the browser and onto the server. |
+| 1.29.0 | Reserve days: new `reserve_days` table, deliberately outside `flights` so an import cannot destroy hand-entered data. Shown quieter than a trip on the calendar. |
+| 1.29.1 | The reserve picker on the Flights page, placed beside Import. |
+| 1.29.2 | Reserve on the calendar grid; a month with only reserve counts as a month with data; month counts accumulate rather than reset on navigation. |
+
+`app/reserve.py` is the exception: it carries a full docstring explaining
+why reserve lives in its own table and why "overwritten by an assigned
+flight" is a display rule rather than a delete. That module is the only
+part of this range that documented itself, and it is the model for what
+the other four should have done.
 
 ### v6.4 – v7.4 — NOT RECORDED
 
