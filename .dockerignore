@@ -1,12 +1,33 @@
+# WHAT NEVER GOES INTO THE IMAGE.
+#
+# The Dockerfile ends in `COPY . .`, so anything not listed here is baked
+# into the running container. Before 1.31.0 that included every test file
+# — about 350KB of them — because they sat at the project root next to
+# the app. They are now under dev/, which is excluded wholesale.
+#
+# Rule of thumb: if it is not needed to SERVE A REQUEST, it belongs in
+# dev/ and therefore never reaches the box.
+
 .git
 .gitignore
 __pycache__
 *.pyc
 .venv
 venv
+
+# Everything that is not deployed: tests, developer tools, records and
+# the AI briefing. See dev/AI-README.md.
+dev/
+
+# The long-form human docs. The app does not read them.
+README.md
+
+# Runtime state. These live on the NAS in a mounted volume and must never
+# be copied in from a build context — a stale database or, far worse, a
+# stale session key baked into an image would silently override the real
+# one on every deploy.
 data/*.db
 data/*.db-*
 data/settings.json
 data/schedule.json
 data/secret_key.txt
-README.md
