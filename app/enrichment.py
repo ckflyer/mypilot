@@ -287,6 +287,45 @@ def budget_state(user_id: int) -> Dict[str, Any]:
         # exactly backwards. Anyone on a paid tier raises the number.
         "exhausted": over,
         "cost_per_query": COST_PER_QUERY_USD,
+        # WHEN THE COUNTER GOES BACK TO ZERO (report #3, 1.32.0).
+        #
+        # The page said "Usage this month (2026-09)" and left the reader to
+        # work out what "this month" ends. That matters in exactly the
+        # situation where somebody looks: the budget is nearly spent and
+        # the question is whether to raise the cap or wait. "Resets in 3
+        # days" answers it; a period string does not.
+        #
+        # The period is a CALENDAR MONTH in UTC, because that is what
+        # `query_stats` buckets on and what FlightAware bills on. Derived
+        # here from that same value rather than from today's date, so the
+        # two cannot disagree about which month is being counted.
+        **_period_reset(stats["period"]),
+    }
+
+
+def _period_reset(period: str) -> dict:
+    """Turn a "YYYY-MM" bucket into when it rolls over, in plain words.
+
+    Returns empty strings rather than raising on a malformed period: this
+    decorates a usage panel, and a settings page that 500s because a date
+    string was odd is a worse outcome than one missing line.
+    """
+    try:
+        year, month = (int(x) for x in str(period).split("-")[:2])
+        nxt = datetime(year + (month == 12), (month % 12) + 1, 1,
+                       tzinfo=timezone.utc)
+    except Exception:
+        return {"resets_on": "", "resets_in": ""}
+    days = (nxt - datetime.now(timezone.utc)).days
+    if days < 0:
+        # The stored period is behind the clock, which happens when nothing
+        # has been queried since the month turned. The counter is already
+        # zero for the new month; say so rather than printing a negative.
+        return {"resets_on": "", "resets_in": "already reset"}
+    return {
+        "resets_on": nxt.strftime("%b %-d"),
+        "resets_in": ("today" if days == 0 else
+                      "tomorrow" if days == 1 else f"in {days} days"),
     }
 
 

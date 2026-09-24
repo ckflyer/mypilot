@@ -2264,8 +2264,12 @@ async def feedback_submit(request: Request, message: str = Form(""),
         user_id=user_id, reporter=name, is_viewer=is_viewer, kind=kind,
         message=message, page=back, app_version=VERSION,
         user_agent=request.headers.get("user-agent", ""))
+    # WORDING IS THE OWNER'S (report #2, 1.32.0). The old line —
+    # "Thanks, that has gone to the admin inbox" — described the app's
+    # plumbing rather than thanking anyone, and on a viewer's phone
+    # "the admin inbox" names a place they have never seen.
     request.session["_fb_notice"] = (
-        "Thanks — that has gone to the admin inbox." if ok else
+        "Thank you for your feedback." if ok else
         "That could not be saved. Please try again.")
     return RedirectResponse(url=back, status_code=303)
 
@@ -3605,6 +3609,7 @@ async def api_selected(request: Request, leg: Optional[str] = None):
         "closed": extra.get("closed"),
         "closed_by": extra.get("closed_by"),
         "arrival_source": extra.get("arrival_source"),
+        "arrival_unconfirmed": extra.get("arrival_unconfirmed"),
         "dep_shown": extra.get("dep_shown"),
         "arr_shown": extra.get("arr_shown"),
         "gates": extra.get("gates"),

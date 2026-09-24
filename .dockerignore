@@ -19,6 +19,10 @@ venv
 # the AI briefing. See dev/AI-README.md.
 dev/
 
+# A Windows helper the owner double-clicks. Harmless, but it is not
+# something a Linux container can run.
+_push.bat
+
 # The long-form human docs. The app does not read them.
 README.md
 

@@ -25,7 +25,7 @@ data/         the database (created on first run; not in git)
 Dockerfile  docker-compose.yml  requirements.txt  update.sh
 README.md     this file
 
-dev/          NOT deployed — excluded from the Docker image
+dev/          in git, but NOT in the running image
   AI-README.md    the working brief: why everything is the way it is
   tests/          14 suites, ~2,400 assertions
   tools/          one-off checkers and the icon generator
@@ -35,6 +35,9 @@ dev/          NOT deployed — excluded from the Docker image
 
 **Everything at the root is needed to serve a request. Everything under
 `dev/` is not**, and `.dockerignore` keeps it out of the image entirely.
+It is still tracked in git: the repo and the running container are
+different things, and the tests and the brief need backing up like
+anything else.
 If you are looking for the reasoning behind a design decision rather than
 a description of it, it is in `dev/AI-README.md`.
 

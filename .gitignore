@@ -27,3 +27,14 @@ Thumbs.db
 .uvicorn/
 
 data/settings.json
+
+# dev/ IS TRACKED, deliberately — do not add it here.
+#
+# It holds the test suites and dev/AI-README.md, and for one release they
+# lived only on the owner's machine: not in git, not on GitHub, one disk
+# failure from gone. The brief is also the only record of why anything in
+# this project is the way it is, so it has to travel WITH the project.
+#
+# Keeping it out of the running container is `.dockerignore`'s job, not
+# this file's. The repo and the image are different things: `git pull`
+# puts dev/ on the NAS, and the Docker build then ignores it.

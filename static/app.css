@@ -958,3 +958,19 @@ body { padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important; }
 .leaflet-pane.basemap-raster-dark {
   filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(0.9);
 }
+
+/* AN ARRIVAL THE AIRLINE HAS NOT CONFIRMED (report #4, 1.32.0).
+   HERE rather than in a template, because the marker appears on the
+   tracker card, the tracker's leg rows and the calendar's rows — three
+   surfaces, one rule (invariant 27). `.status` itself is still declared
+   per-template; only the marker is shared, which is the part that would
+   otherwise drift.
+   aria-hidden on the span: a screen reader saying "Arrived star" is
+   noise, and the sentence under the airline data carries the meaning in
+   words for anyone who cannot see the mark. */
+.unconf { margin-left: 0.08rem; font-weight: 700; }
+.unconf-note {
+  display: flex; gap: 0.3rem; align-items: baseline;
+  margin: 0.45rem 0 0; font-size: 0.75rem; line-height: 1.45;
+  color: var(--muted);
+}

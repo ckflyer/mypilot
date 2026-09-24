@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.31.0 -->
+<!-- BUILT_FOR 1.32.0 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -344,7 +344,7 @@
               {% if leg.status_tag or leg.phase_tag %}
               <span class="pills fstrip-tags">
                 {% if leg.status_tag %}<span class="status {{ leg.status_tag|lower|replace(' ', '-') }}">{{ leg.status_tag }}</span>{% endif %}
-                {% if leg.phase_tag %}<span class="status phase {{ 'arrived' if leg.phase_tag == 'Arrived' else '' }}">{{ leg.phase_tag }}</span>{% endif %}
+                {% if leg.phase_tag %}<span class="status phase {{ 'arrived' if leg.phase_tag == 'Arrived' else '' }}">{{ leg.phase_tag }}{% if leg.arrival_unconfirmed %}<span class="unconf" aria-hidden="true">*</span>{% endif %}</span>{% endif %}
               </span>
               {% endif %}
             </div>

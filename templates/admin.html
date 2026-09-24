@@ -1,4 +1,4 @@
-{# BUILT_FOR 1.31.0 #}
+{# BUILT_FOR 1.32.0 #}
 {#- The ADMIN page. Everything that operates the INSTALL, on one screen.
 
     NAMING, because it caused real confusion. /flights is one pilot's
@@ -95,35 +95,68 @@
     .warn { border-left: 3px solid var(--warn); padding-left: 0.7rem; font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
-    /* ---- the feedback inbox ------------------------------------------ */
-    .fbrow {
-      border-top: 1px solid var(--border); padding: 0.75rem 0;
-      display: grid; gap: 0.3rem;
+    /* ---- the feedback inbox (rebuilt 1.32.0) --------------------------
+       The message is the only thing here worth reading first, so it gets
+       the size and the position; name above it, machine detail beneath it
+       in small grey, actions last. Before this every part of a report was
+       the same weight and the words were the smallest share of the row. */
+    .fb-group {
+      font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--muted);
+      margin: 1.1rem 0 0.3rem;
     }
-    .fbrow:first-child { border-top: 0; }
-    .fb-top { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: baseline; }
-    .fb-who { font-weight: 600; font-size: 0.9rem; }
+    .fb-group:first-of-type { margin-top: 0.5rem; }
+    .fbrow {
+      border: 1px solid var(--border); border-left-width: 3px;
+      border-radius: 11px; padding: 0.7rem 0.8rem; margin-bottom: 0.5rem;
+    }
+    .fbrow.new  { border-left-color: var(--accent); }
+    .fbrow.open { border-left-color: var(--warn); }
+    .fbrow.done { border-left-color: var(--border); opacity: 0.62; }
+    .fb-top { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; }
+    .fb-who { font-weight: 700; font-size: 0.82rem; }
     .fb-tag {
-      font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.04em; padding: 0.15rem 0.4rem; border-radius: 999px;
+      font-size: 0.62rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.04em; padding: 0.12rem 0.38rem; border-radius: 999px;
       background: var(--input-bg); color: var(--muted);
     }
     .fb-tag.bug { background: rgba(239,68,68,0.15); color: var(--bad); }
     .fb-tag.idea { background: rgba(34,197,94,0.15); color: var(--good); }
     .fb-tag.viewer { background: rgba(245,158,11,0.18); color: var(--warn); }
-    .fb-when { color: var(--muted); font-size: 0.74rem; margin-left: auto; }
-    /* pre-wrap, because a bug report is prose somebody typed with line
-       breaks in it and collapsing them loses the shape of what they said. */
+    .fb-when { margin-left: auto; color: var(--muted); font-size: 0.7rem; }
+    /* pre-wrap, because a report is prose somebody typed with line breaks
+       in it and collapsing them loses the shape of what they said. */
     .fb-msg {
       white-space: pre-wrap; overflow-wrap: anywhere;
-      font-size: 0.875rem; line-height: 1.5;
-      background: var(--input-bg); border-radius: 9px; padding: 0.6rem 0.7rem;
+      font-size: 0.95rem; line-height: 1.5; margin: 0.45rem 0 0.5rem;
     }
-    .fb-meta { color: var(--muted); font-size: 0.72rem; overflow-wrap: anywhere; line-height: 1.5; }
-    .fbrow.done { opacity: 0.55; }
-    .fb-acts { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+    .fb-foot {
+      display: flex; flex-wrap: wrap; gap: 0.3rem 0.6rem; align-items: baseline;
+      font-size: 0.7rem; color: var(--muted);
+      font-family: ui-monospace, monospace; overflow-wrap: anywhere;
+    }
+    /* The build is the first thing worth checking on any report — a phone
+       serving the previous release looks exactly like a real bug — so it
+       stays visible, and says so loudly when it is not the running one. */
+    .fb-build.stale { color: var(--warn); font-weight: 700; }
+    .fb-page::before { content: "· "; }
+    /* A user-agent string is 120 characters of noise until the one time it
+       matters, so it folds. */
+    .fb-dev > summary {
+      cursor: pointer; list-style: none; text-decoration: underline;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .fb-dev > summary::-webkit-details-marker { display: none; }
+    .fb-dev > summary::marker { content: ""; }
+    .fb-dev > span { display: block; margin-top: 0.25rem; }
+    .fb-acts { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.6rem; }
     .fb-acts form { margin: 0; }
-    .fb-acts button { padding: 0.3rem 0.6rem; font-size: 0.74rem; }
+    .fb-acts button { padding: 0.32rem 0.65rem; font-size: 0.74rem; }
+    .fb-done { margin-top: 1.1rem; }
+    .btnrow .dl {
+      padding: 0.35rem 0.7rem; font-size: 0.75rem; border-radius: 8px;
+      border: 1px solid var(--border); color: var(--text); text-decoration: none;
+    }
 
     /* ---- the generated diagnostics panel ------------------------------
        These classes are emitted by main.build_diagnostics_html. They are
@@ -267,29 +300,54 @@
       <div class="grow-body">
         {% if not inbox %}
         <p class="hint">Nothing reported yet. Anyone signed in can send one from
-          <strong>Settings → Report a problem</strong> — including viewers, who have
+          <strong>Settings &rarr; Report a problem</strong> — including viewers, who have
           no account but do have the app in front of them. Their build, their page
           and their device are attached automatically.</p>
         {% else %}
-        <p class="hint">Newest first. <strong>Build</strong> is the one thing worth
-          reading before anything else: a phone serving a cached copy of the previous
-          release looks exactly like a real bug until you know the version.</p>
-        {% for f in inbox %}
-        <div class="fbrow {{ 'done' if f.status == 'done' }}">
+        {#- REORGANISED (report #6, 1.32.0): "make the feedback bug messages
+            easier to read".
+
+            The old list was one flat run of rows, newest first, every row
+            the same weight, with the reporter, the build, the page, the
+            device and four buttons all at the same size as the message
+            itself. The one thing worth reading — what the person actually
+            wrote — was the smallest share of the row.
+
+            Three changes:
+
+            1. GROUPED BY STATE. New first, then the ones being worked on,
+               then done. Done reports are the bulk of the list over time
+               and they are the ones nobody needs; they now sit inside a
+               shut <details> instead of padding the page.
+            2. THE MESSAGE LEADS. It is the largest text in the row and
+               sits directly under the name. Everything else is a footer.
+            3. THE MACHINE DETAIL IS FOLDED. Device strings are 120
+               characters of noise until the moment they matter, so they
+               are behind a per-row disclosure; the BUILD stays out in the
+               open, because that one is read every time.
+
+            The row markup is a macro so the three groups cannot drift
+            into formatting the same report differently. -#}
+        {% macro report(f) %}
+        <div class="fbrow {{ f.status }}">
           <div class="fb-top">
             <span class="fb-who">{{ f.reporter }}</span>
-            <span class="fb-tag {{ f.kind }}">{{ f.kind_label }}</span>
             {% if f.is_viewer %}<span class="fb-tag viewer">viewer</span>{% endif %}
-            {% if f.status != 'new' %}<span class="fb-tag">{{ f.status }}</span>{% endif %}
+            <span class="fb-tag {{ f.kind }}">{{ f.kind_label }}</span>
             <span class="fb-when">{{ f.date_label }}</span>
           </div>
           <div class="fb-msg">{{ f.message }}</div>
-          <div class="fb-meta">
-            build <strong>{{ f.app_version or '?' }}</strong>{% if f.app_version and f.app_version != version %}
-            <span class="alert">· not this build ({{ version }})</span>{% endif %}
-            · page <code>{{ f.page or '?' }}</code>
-            {% if f.user_agent %}<br>{{ f.user_agent }}{% endif %}
-            {% if f.handled_at %}<br>marked done {{ f.handled_at[:16]|replace('T',' ') }}{% if f.handled_by %} by {{ f.handled_by }}{% endif %}{% endif %}
+          <div class="fb-foot">
+            <span class="fb-build{% if f.app_version and f.app_version != version %} stale{% endif %}">
+              {{ f.app_version or 'build unknown' }}{% if f.app_version and f.app_version != version %} · not current{% endif %}
+            </span>
+            <span class="fb-page">{{ f.page or '—' }}</span>
+            {% if f.user_agent %}
+            <details class="fb-dev">
+              <summary>device</summary>
+              <span>{{ f.user_agent }}</span>
+            </details>
+            {% endif %}
           </div>
           <div class="fb-acts">
             {% if f.status != 'open' %}
@@ -299,7 +357,7 @@
             {% endif %}
             {% if f.status != 'done' %}
             <form method="post" action="/admin/feedback/{{ f.id }}/status">
-              <input type="hidden" name="status" value="done"><button type="submit">Mark done</button>
+              <input type="hidden" name="status" value="done"><button type="submit" class="primary">Done</button>
             </form>
             {% else %}
             <form method="post" action="/admin/feedback/{{ f.id }}/status">
@@ -312,9 +370,36 @@
             </form>
           </div>
         </div>
-        {% endfor %}
+        {% endmacro %}
+
+        {% set fresh = inbox | selectattr('status', 'equalto', 'new') | list %}
+        {% set working = inbox | selectattr('status', 'equalto', 'open') | list %}
+        {% set finished = inbox | selectattr('status', 'equalto', 'done') | list %}
+
+        {% if fresh %}
+        <div class="fb-group">New</div>
+        {% for f in fresh %}{{ report(f) }}{% endfor %}
+        {% endif %}
+
+        {% if working %}
+        <div class="fb-group">Looking at</div>
+        {% for f in working %}{{ report(f) }}{% endfor %}
+        {% endif %}
+
+        {% if finished %}
+        <details class="dfold fb-done">
+          <summary>
+            <span>Done</span>
+            <span class="dfold-v">{{ finished|length }}</span>
+          </summary>
+          <div class="dfold-b">
+            {% for f in finished %}{{ report(f) }}{% endfor %}
+          </div>
+        </details>
+        {% endif %}
+
         <div class="btnrow">
-          <a class="dl" href="/admin/feedback/download" style="padding:0.35rem 0.7rem;font-size:0.75rem;border-radius:8px;border:1px solid var(--border);color:var(--text);text-decoration:none">Download all as text</a>
+          <a class="dl" href="/admin/feedback/download">Download all as text</a>
         </div>
         {% endif %}
       </div>

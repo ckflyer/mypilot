@@ -518,6 +518,28 @@ def build(row, leg, now: datetime, time_format: str = "24",
         # the P1-5 rule: the server decides, the client displays.
         "arrival_source_text": ARRIVAL_SOURCE_TEXT.get(
             _col(row, "arrival_source") or "", None),
+        # AN ARRIVAL THE AIRLINE HAS NOT CONFIRMED (report #4, 1.32.0).
+        #
+        # "Arrived" is the strongest claim this app makes, and it is
+        # reached three different ways: the airline published a gate-in,
+        # or the app watched the aeroplane stop moving, or a backstop
+        # timer ran out. Only the first is somebody else's fact. The other
+        # two are this app's own inference, and they can be wrong — a leg
+        # that lands at a remote stand, or one whose ADS-B simply went
+        # quiet, arrives here on a guess.
+        #
+        # The card showed all three identically. The asterisk marks the
+        # difference at the point the claim is made, and the expanded view
+        # says what it means. Computed HERE rather than in a template, so
+        # the card, the leg rows and the poll cannot come to disagree
+        # about which arrivals are confirmed — the P1-5 rule.
+        #
+        # Deliberately only for CLOSED legs. An in-flight leg has no
+        # arrival to confirm, so an asterisk on it would be marking the
+        # absence of a fact that is not due yet.
+        "arrival_unconfirmed": bool(
+            closed and _col(row, "arrival_source")
+            and _col(row, "arrival_source") != "airline"),
         "enriched": bool(_col(row, "last_api_query_at")),
         "enriched_at": _ago_text(_parse(_col(row, "last_api_query_at")), now),
         # The same instant as an ISO string, so the page can recompute

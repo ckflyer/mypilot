@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.31.0 -->
+<!-- BUILT_FOR 1.32.0 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -134,7 +134,29 @@
        the corrected time tinted instead, and the delta is stated in words
        in the expanded view. */
     .route-strip { margin-top: 0.7rem; }
-    .route-line { position: relative; height: 22px; margin: 0.6rem 0 0.15rem; }
+    /* The top margin carries the percentage label that rides above the
+       plane. It used to be 0.6rem; the extra room is the label's. */
+    .route-line { position: relative; height: 22px; margin: 1.45rem 0 0.15rem; }
+    /* THE PERCENTAGE, ON THE BAR (report #7, 1.32.0).
+       A viewer said it had stopped showing the percentage. It had not —
+       it was in the stats row under the track, muted, at 0.75rem, third
+       of the way along a line that also carries distance and ETE. It was
+       present and unfindable, which for the person this app is built for
+       is the same thing.
+       It now rides with the aeroplane, so the number and the thing it
+       describes are in the same place. Still only ever drawn from a real
+       position fix (invariant 9) — an arrived leg fills the bar but
+       prints no figure, because that fill comes from closure, not from a
+       measurement. */
+    .route-pct {
+      position: absolute; top: -1.15rem;
+      transform: translateX(-50%);
+      font-size: 0.72rem; font-weight: 700;
+      color: var(--accent); background: var(--card);
+      padding: 0 0.2rem; border-radius: 4px;
+      font-variant-numeric: tabular-nums; white-space: nowrap;
+      transition: left 0.6s ease;
+    }
     .route-track {
       position: absolute; top: 9px; left: 0; right: 0; height: 4px;
       background: var(--border); border-radius: 999px; overflow: hidden;
@@ -336,7 +358,7 @@
     @keyframes rd-pulse { 0%, 100% { opacity: 0.45 } 50% { opacity: 1 } }
     @media (prefers-reduced-motion: reduce) {
       .rd-skeleton span { animation: none; }
-      .route-fill, .route-plane { transition: none; }
+      .route-fill, .route-plane, .route-pct { transition: none; }
     }
     .rd-links { margin-top: 0.55rem; display: flex; gap: 0.9rem; }
     .rd-links a {
@@ -625,11 +647,39 @@
       overscroll-behavior: contain;
       padding: 1rem 1.1rem calc(1rem + 46px + env(safe-area-inset-bottom, 0px));
       transform: translateY(101%);
-      transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1);
       visibility: hidden;
+      /* VISIBILITY IS PART OF THE TRANSITION, and that is what makes the
+         slide happen at all (report #1, 1.32.0).
+
+         The panel sits at `visibility: hidden` while closed, so it does
+         not sit in the tab order or take taps through the map. Adding
+         `.open` flipped visibility and transform in the same frame — and
+         Safari will not interpolate a transform on an element that was
+         not being rendered a moment ago. It has nothing to animate FROM,
+         so it jumps straight to the end state. That is the "teleport".
+         Chrome is more forgiving, which is why it survived testing.
+
+         The fix is the standard pairing. On the way IN, visibility
+         switches at 0s with no delay, so the element is rendered before
+         the transform starts and there is something to animate from. On
+         the way OUT, visibility is DELAYED by the full duration, so the
+         panel stays rendered while it slides down and only disappears
+         once it has gone. Removing the delay would make closing teleport
+         instead. */
+      transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1),
+                  visibility 0s linear 300ms;
     }
-    .detail-panel.open { transform: translateY(0); visibility: visible; }
-    @media (prefers-reduced-motion: reduce) { .detail-panel { transition: none; } }
+    .detail-panel.open {
+      transform: translateY(0);
+      visibility: visible;
+      transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1),
+                  visibility 0s linear 0s;
+    }
+    /* Motion off means motion off — but visibility must still flip, or the
+       panel would become permanently unreachable. */
+    @media (prefers-reduced-motion: reduce) {
+      .detail-panel, .detail-panel.open { transition: visibility 0s; }
+    }
     /* SLIDE-OPEN PANEL.
        All the spacing (gap, rule, padding) lives on the inner wrapper, and
        the outer element carries nothing but overflow:hidden and a height the
@@ -923,8 +973,12 @@
           <span class="pills fstrip-tags">
             <span class="status {{ current.status_tag|lower|replace(' ', '-') if current.status_tag else '' }}" id="status-badge"
                   style="{{ '' if current.status_tag else 'display:none' }}">{{ current.status_tag or '' }}</span>
+            {#- The asterisk marks an arrival the airline has not confirmed
+                (report #4, 1.32.0). See view.arrival_unconfirmed, and the
+                note it puts under the airline data below. -#}
             <span class="status phase {{ 'arrived' if current.phase_tag == 'Arrived' else '' }}" id="phase-badge"
-                  style="{{ '' if current.phase_tag else 'display:none' }}">{{ current.phase_tag or '' }}</span>
+                  data-unconfirmed="{{ '1' if current.arrival_unconfirmed else '0' }}"
+                  style="{{ '' if current.phase_tag else 'display:none' }}">{{ current.phase_tag or '' }}{% if current.arrival_unconfirmed %}<span class="unconf" aria-hidden="true">*</span>{% endif %}</span>
           </span>
           <span class="last-tracked" id="last-tracked"
                 style="{{ '' if current.signal_note else 'display:none' }}">{{ current.signal_note or '' }}</span>
@@ -951,12 +1005,18 @@
         <div class="route-line" id="progress-wrap-el"
              style="{{ '' if (current.progress_pct is not none or current.phase_tag == 'Arrived') else 'display:none' }}">
           <div class="route-track"><div class="route-fill" id="progress-fill-el" style="width: {{ fill_pct }}%"></div></div>
+          {#- `clamp` keeps the label inside the card at 0% and 100%,
+              where translateX(-50%) alone would hang it over the edge. -#}
+          <div class="route-pct" id="route-pct-el"
+               style="left: clamp(1.1rem, {{ fill_pct }}%, calc(100% - 1.1rem));{{ '' if current.progress_pct is not none else ' display:none' }}">{{ (current.progress_pct|round|int) if current.progress_pct is not none else '' }}%</div>
           <div class="route-plane" id="route-plane-el"
                style="left: {{ fill_pct }}%;{{ '' if current.progress_pct is not none else ' display:none' }}"><svg viewBox="0 0 64 64" width="20" height="20" aria-hidden="true" style="transform: rotate(90deg);"><path d="M32 4c2.6 0 4.4 3.4 4.7 8.6l.5 7.8 23 17.4c.5.4.7 1 .7 1.7v3.3L37.4 36.4l.9 11.9 6.6 5.4c.5.4.6 1 .6 1.6v2L32 53.6l-13.5 3.7v-2c0-.6.1-1.2.6-1.6l6.6-5.4.9-11.9L3.1 42.8v-3.3c0-.7.2-1.3.7-1.7l23-17.4.5-7.8C27.6 7.4 29.4 4 32 4z"/></svg></div>
         </div>
         <div class="route-stats" id="progress-label-el">
+          {#- The percentage moved onto the bar above, so it is NOT repeated
+              here. Two copies of one figure a centimetre apart is how a
+              reader starts wondering whether they mean different things. -#}
           {%- if current.progress_pct is not none %}
-          <span>{{ current.progress_pct|round|int }}% en route</span>
           {%- if current.distance_nm is not none %}<span>{{ current.distance_nm|round|int }} nm to go</span>{% endif %}
           {%- if current.ete %}<span>ETE {{ current.ete }}</span>{% endif %}
           {%- endif %}
@@ -1046,6 +1106,17 @@
               <span class="k">Arrival time from</span>
               <span class="v" id="v-arrsrc">{{ current.arrival_source_text or '' }}</span>
             </div>
+            {#- WHAT THE ASTERISK MEANS (report #4, 1.32.0), directly under
+                the airline data it qualifies — which is where the owner
+                asked for it, and the only place it makes sense: the note
+                exists to explain why THIS arrival time is not the
+                airline's. -#}
+            <p class="unconf-note" id="row-unconf"
+               style="{{ '' if current.arrival_unconfirmed else 'display:none' }}">
+              <span class="unconf" aria-hidden="true">*</span>
+              The airline has not confirmed this arrival. The time above is
+              this app&rsquo;s own, from watching the aeroplane.
+            </p>
             <div class="detail-row" id="row-updated" style="{{ '' if current.enriched else 'display:none' }}">
               <span class="k">Airline data</span>
               <span class="v" id="v-updated" data-ago="{{ current.enriched_at_iso or '' }}">{{ current.enriched_at or '' }}</span>
@@ -1172,7 +1243,7 @@
                 {% if leg.status_tag or leg.phase_tag %}
                 <span class="pills fstrip-tags">
                   {% if leg.status_tag %}<span class="status {{ leg.status_tag|lower|replace(' ', '-') }}">{{ leg.status_tag }}</span>{% endif %}
-                  {% if leg.phase_tag %}<span class="status phase {{ 'arrived' if leg.phase_tag == 'Arrived' else '' }}">{{ leg.phase_tag }}</span>{% endif %}
+                  {% if leg.phase_tag %}<span class="status phase {{ 'arrived' if leg.phase_tag == 'Arrived' else '' }}">{{ leg.phase_tag }}{% if leg.arrival_unconfirmed %}<span class="unconf" aria-hidden="true">*</span>{% endif %}</span>{% endif %}
                 </span>
                 {% endif %}
               </div>
@@ -2070,7 +2141,18 @@
         const pb = document.getElementById('phase-badge');
         if (pb) {
           const showPhase = phaseTag && statusTag !== 'Cancelled';
+          // textContent would wipe the asterisk span, so it is rebuilt
+          // rather than assumed to survive. The flag is read off the
+          // badge's own dataset, which applyStatus sets from the poll —
+          // the asterisk must not be decided here from phaseTag alone.
           pb.textContent = showPhase ? phaseTag : '';
+          if (showPhase && pb.dataset.unconfirmed === '1') {
+            const star = document.createElement('span');
+            star.className = 'unconf';
+            star.setAttribute('aria-hidden', 'true');
+            star.textContent = '*';
+            pb.appendChild(star);
+          }
           pb.className = 'status phase' + (phaseTag === 'Arrived' ? ' arrived' : '');
           pb.style.display = showPhase ? '' : 'none';
         }
@@ -2095,12 +2177,21 @@
           plane.style.left = at + '%';
           plane.style.display = known ? '' : 'none';
         }
+        // The label tracks the plane. Same clamp as the server-rendered
+        // style, so a poll cannot move it somewhere the first paint would
+        // not have put it.
+        const pctEl = document.getElementById('route-pct-el');
+        if (pctEl) {
+          pctEl.style.left = 'clamp(1.1rem, ' + at + '%, calc(100% - 1.1rem))';
+          pctEl.textContent = known ? Math.round(pct) + '%' : '';
+          pctEl.style.display = known ? '' : 'none';
+        }
         if (stats) {
           // All three figures come from the same position fix, so they
           // appear together or not at all.
           const parts = [];
           if (known) {
-            parts.push('<span>' + Math.round(pct) + '% en route</span>');
+            // No percentage here; it is on the bar (see route-pct).
             if (distanceNm != null) parts.push('<span>' + Math.round(distanceNm) + ' nm to go</span>');
             if (ete) parts.push('<span>ETE ' + ete + '</span>');
           }
@@ -2284,7 +2375,10 @@
         if (data.phase_tag) {
           html += '<span class="status phase ' +
                   (data.phase_tag === 'Arrived' ? 'arrived' : '') + '">' +
-                  data.phase_tag + '</span>';
+                  data.phase_tag +
+                  (data.arrival_unconfirmed
+                    ? '<span class="unconf" aria-hidden="true">*</span>' : '') +
+                  '</span>';
         }
         tags.innerHTML = html;
       }
@@ -2439,6 +2533,13 @@
         // page; it is just not on the family's card.
         setShown('row-arrsrc', !!data.arrival_source_text);
         setText('v-arrsrc', data.arrival_source_text);
+        // The badge, the note and the flag all move together. An arrival
+        // upgraded from observed to airline (closure.upgrade does exactly
+        // that when a late gate-in arrives) must drop its asterisk in the
+        // same repaint that drops the note, or the card contradicts itself.
+        setShown('row-unconf', !!data.arrival_unconfirmed);
+        const _pb = document.getElementById('phase-badge');
+        if (_pb) _pb.dataset.unconfirmed = data.arrival_unconfirmed ? '1' : '0';
 
         var lt = document.getElementById('last-tracked');
         if (lt) {

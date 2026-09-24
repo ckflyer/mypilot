@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.31.0 -->
+<!-- BUILT_FOR 1.32.0 -->
 <html lang="en" data-theme="{{ s.theme }}" data-accent="{{ s.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -378,12 +378,18 @@
                    placeholder="{{ 'saved \u2014 leave blank to keep it' if s.aeroapi_key else 'paste your AeroAPI key' }}">
             <p class="hint">flightaware.com &rarr; AeroAPI &rarr; <strong>Personal</strong> tier. Includes $5/month free, $10 if you feed ADS-B.</p>
             <div class="usage-block">
+              {#- "Usage this month" left the reader to work out when this
+                  month ends, which matters in exactly the case where
+                  anyone looks at this panel: the budget is nearly gone
+                  and the question is whether to raise the cap or wait.
+                  (report #3, 1.32.0) -#}
               <span class="usage-label">Usage this month ({{ aeroapi_stats.period }})</span>
               {% if aeroapi_stats.has_reading %}
               <span class="usage-value"{% if aeroapi_stats.over_budget %} style="color:var(--bad)"{% endif %}>${{ '%.2f'|format(aeroapi_stats.spent) }} of ${{ '%.2f'|format(aeroapi_stats.budget) }}</span>
               <span class="usage-meta">
                 {{ aeroapi_stats.reported_calls or aeroapi_stats.queries }} calls &middot; FlightAware&rsquo;s figure{% if aeroapi_stats.usage_age %}, {{ aeroapi_stats.usage_age }}{% endif %}<br>
                 Tracker last ran <strong{% if poller.stale %} class="warn"{% endif %}>{{ poller.label }}</strong>{% if poller.stale %} &mdash; longer ago than it should be{% endif %}
+                {%- if aeroapi_stats.resets_in %}<br>Resets {{ aeroapi_stats.resets_in }}{% if aeroapi_stats.resets_on %} ({{ aeroapi_stats.resets_on }}){% endif %}{% endif %}
                 {%- if not aeroapi_stats.reading_fresh %}<br><span class="bad">Spend reading is stale; the limit is being held against a local count until it updates.</span>{% endif %}
               </span>
               {% else %}
@@ -391,13 +397,14 @@
               <span class="usage-meta">
                 No reading yet; it appears within 15 minutes of the key being used.<br>
                 Tracker last ran <strong{% if poller.stale %} class="warn"{% endif %}>{{ poller.label }}</strong>
+                {%- if aeroapi_stats.resets_in %}<br>Resets {{ aeroapi_stats.resets_in }}{% if aeroapi_stats.resets_on %} ({{ aeroapi_stats.resets_on }}){% endif %}{% endif %}
               </span>
               {% endif %}
             </div>
             {% if aeroapi_stats.exhausted %}
             <p class="hint" style="color:var(--bad);font-weight:600;">
               {% if aeroapi_stats.budget <= 0 %}Limit set to $0 &mdash; AeroAPI queries are off. Live ADS-B tracking is unaffected.
-              {%- else %}Limit reached &mdash; AeroAPI is paused until the month rolls over. Live ADS-B tracking is unaffected.{% endif %}
+              {%- else %}Limit reached &mdash; AeroAPI is paused until the counter resets{% if aeroapi_stats.resets_in %} {{ aeroapi_stats.resets_in }}{% if aeroapi_stats.resets_on %}, {{ aeroapi_stats.resets_on }}{% endif %}{% endif %}. Live ADS-B tracking is unaffected.{% endif %}
             </p>
             {% endif %}
             <label for="aeroapi-budget" style="margin-top:1rem;">Monthly spend limit (USD)</label>
