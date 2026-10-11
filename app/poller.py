@@ -416,7 +416,7 @@ def _maybe_purge() -> None:
     try:
         removed = purge_old()
         if removed:
-            print(f"[poller] purged {removed} flights past their 30-day retention")
+            print(f"[poller] purged {removed} flights past retention")
     except Exception as e:
         print(f"[poller] purge failed: {e}")
 

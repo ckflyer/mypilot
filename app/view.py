@@ -24,7 +24,7 @@ minute — the card used to print a scheduled time next to a note saying
 """
 from __future__ import annotations
 
-from datetime import date as date_cls, datetime, timezone
+from datetime import date as date_cls, datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
@@ -393,6 +393,47 @@ def strip_lines(leg, row, phase_tag, cancelled, closed, time_format="24"):
             _time_line(arr_delay, arr_base, d_tz, time_format))
 
 
+# HOW LONG A LANDED FLIGHT KEEPS ITS FULL BAR (report #8, 1.33.0).
+#
+# The bar used to stay full on every arrived leg FOREVER — tap a flight
+# from last week and there it was, a completed progress bar with nothing
+# in progress. The owner's call: hide it once the flight is over, but hold
+# it at 100% for a while after landing first, so someone checking in just
+# after touchdown sees "he's down" in the same place they were watching.
+#
+# Thirty minutes is the same "walk off the aeroplane" window the app uses
+# elsewhere for a leg settling (see LEG_SETTLE in the AI-README).
+ARRIVED_BAR_HOLD = timedelta(minutes=30)
+
+
+def _shown_progress(row, closed: bool, cancelled: bool, now: datetime):
+    """The percentage the card should show, or None for no bar at all.
+
+    ONE RULE FOR THE PAGE: the bar is drawn when this is a number and
+    hidden when it is None. An open leg shows whatever the poller measured
+    from a real position fix (invariant 9 — no fix, no figure). A closed
+    leg shows 100 for ARRIVED_BAR_HOLD after it came down, then nothing.
+
+    The hold runs from TOUCHDOWN (airline wheels-on, else watched), falling
+    back to gate-in and then to the moment it closed — the earliest real
+    "it has landed" the row knows. A cancelled leg never gets a bar.
+    """
+    if not closed:
+        return _col(row, "progress_pct")
+    if cancelled:
+        return None
+    landed = None
+    for name in ("on_actual_api", "on_observed", "in_actual_api",
+                 "in_observed", "closed_at"):
+        landed = _parse(_col(row, name))
+        if landed is not None:
+            break
+    if landed is None:
+        return None
+    return 100.0 if now - landed < ARRIVED_BAR_HOLD else None
+
+
+
 def build(row, leg, now: datetime, time_format: str = "24",
           include_breadcrumb: bool = True) -> Dict[str, Any]:
     """Everything the card needs, from the row and nothing else."""
@@ -497,7 +538,7 @@ def build(row, leg, now: datetime, time_format: str = "24",
             or ("waiting on airline gate-in"
                 if (_col(row, "closeout_tries") and not _col(row, "in_actual_api"))
                 else None)),
-        "progress_pct": _col(row, "progress_pct"),
+        "progress_pct": _shown_progress(row, closed, cancelled, now),
         "ete": format_ete(_col(row, "ete_min")),
         "distance_nm": _col(row, "distance_nm"),
         "dep_delay": dep_delay,

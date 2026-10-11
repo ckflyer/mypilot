@@ -485,9 +485,8 @@ RETENTION_DAYS = int(os.environ.get("PT_RETENTION_DAYS") or 365)
 def purge_old(now: Optional[datetime] = None) -> int:
     """Drop flights past retention, plus roster rows and tracks left behind.
 
-    Rows get a purge_after stamp when they close. A leg that never closed
-    is caught by its scheduled date instead, so nothing lingers forever
-    just because it never resolved.
+    Judged by the leg's scheduled DATE, closed or not, so one rule covers
+    every row and nothing lingers just because it never resolved.
 
     RETENTION IS THE ONLY THING THAT DELETES A FLIGHT. Through v5.6 there
     was a second rule — "delete any flight nobody has on their schedule any
@@ -510,13 +509,29 @@ def purge_old(now: Optional[datetime] = None) -> int:
     each user's schedule, not this table — so a retained row costs storage
     and no AeroAPI queries.
     """
+    # THE 30-DAY LEAK (fixed 1.33.0). Through 1.32.0 this deleted any row
+    # whose `purge_after` had passed — and closure.py stamped that column
+    # with closed_at + 30 days on EVERY leg it closed. 1.0.0 raised
+    # retention to a year here and never touched closure, so the year only
+    # ever applied to legs that never closed. Every flown leg — nearly all
+    # of them — was deleted after a month, gates, times, track and all,
+    # while this file and the README both said 365.
+    #
+    # Retention is now decided HERE ALONE, from the leg's own date. The
+    # `purge_after` column is no longer read (migrations are append-only,
+    # so it stays on the table), which also means the 30-day stamps already
+    # written to existing rows stop mattering the moment this deploys.
+    #
+    # 0 or negative means keep forever, as docker-compose.yml has always
+    # promised. Before this, 0 put the cutoff at TODAY and deleted every
+    # past flight on the next sweep.
+    if RETENTION_DAYS <= 0:
+        return 0
     now = now or datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=RETENTION_DAYS)).date().isoformat()
     conn = get_connection()
     try:
-        cur = conn.execute(
-            "DELETE FROM flights WHERE (purge_after IS NOT NULL AND purge_after < ?) "
-            "OR (purge_after IS NULL AND date < ?)", (now.isoformat(), cutoff))
+        cur = conn.execute("DELETE FROM flights WHERE date < ?", (cutoff,))
         removed = cur.rowcount or 0
         # Cleanup runs AFTER the only deletion above, so a row and its
         # dependents go in the same sweep rather than one sweep apart.

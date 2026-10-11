@@ -53,6 +53,15 @@ FLASHES = {
 }
 FLASH_KIND = {"promoted": "good", "demoted": "good"}
 from .ratelimit import check_rate_limit
+from . import ratelimit
+
+# A real PBKDF2 hash of a random string, checked against when the username
+# does not exist so a miss costs the same time as a wrong password.
+_DUMMY_HASH = hash_password(os.urandom(16).hex())
+
+# Wrong share codes tolerated from EVERYONE together per hour before code
+# sign-in pauses. See login_code.
+CODE_FAILS_PER_HOUR = 40
 from . import debuglog
 from . import radar_proxy
 from . import reserve as reserve_days
@@ -65,7 +74,27 @@ jinja_env = Environment(
 )
 jinja_env.globals["version"] = VERSION
 
-app = FastAPI(title="MyPilot")
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    """Startup work, in FastAPI's supported form (1.33.0).
+
+    This was two `@app.on_event("startup")` hooks. FastAPI has deprecated
+    that decorator, and one of the two STARTS THE POLLER — the thing that
+    records every flight. If a future FastAPI removed the old hook, the app
+    would still boot, every page would still load, and nothing would ever
+    be tracked again, with no error anywhere. The requirements are pinned
+    now as well, but this removes the dependency on a deprecated feature
+    rather than just freezing it in place.
+    """
+    _warn_on_half_applied_update()
+    _start_track_poller()
+    yield
+
+
+app = FastAPI(title="MyPilot", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 
 
@@ -93,6 +122,55 @@ async def _no_stale_html(request: Request, call_next):
     return response
 
 
+def _is_https(request: Request) -> bool:
+    """Did the VISITOR's browser use https? Behind Cloudflare the app
+    itself only ever sees plain http from the tunnel, so the proxy's own
+    headers are what say so. Believing a forged one only adds protection
+    to the forger's own response, so no trust check is needed here."""
+    if request.url.scheme == "https":
+        return True
+    if (request.headers.get("x-forwarded-proto") or "").lower().startswith("https"):
+        return True
+    return '"https"' in (request.headers.get("cf-visitor") or "")
+
+
+async def _security_headers(request: Request, call_next):
+    """Browser-side protections on every response. (1.33.0)
+
+    The page shows where someone is, so it gets the standard set:
+
+      * nosniff — a file is only ever treated as the type it was sent as.
+      * frame-ancestors 'none' / X-Frame-Options — no other site can load
+        this app inside a frame and trick someone into tapping it.
+      * Referrer-Policy same-origin — following a FlightAware link does not
+        tell FlightAware which page of this app it came from.
+      * Permissions-Policy — the app never needs camera, microphone or the
+        viewer's location, so the browser is told never to offer them.
+
+    And when the visitor arrived over https (the Cloudflare address):
+      * the login cookie is marked Secure, so a browser will never send it
+        over plain http where it could be read in transit;
+      * HSTS tells the browser to use https for this site from now on.
+    Over plain http on the LAN neither is added, so http://<nas-ip>:8000
+    keeps working exactly as before.
+    """
+    response = await call_next(request)
+    h = response.headers
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("X-Frame-Options", "DENY")
+    h.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+    h.setdefault("Referrer-Policy", "same-origin")
+    h.setdefault("Permissions-Policy",
+                 "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+    if _is_https(request):
+        h.setdefault("Strict-Transport-Security", "max-age=31536000")
+        raw = h.raw
+        for i, (k, v) in enumerate(raw):
+            if k.lower() == b"set-cookie" and b"secure" not in v.lower():
+                raw[i] = (k, v + b"; Secure")
+    return response
+
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=get_or_create_secret_key(),
@@ -100,6 +178,11 @@ app.add_middleware(
     max_age=60 * 60 * 24 * 365,  # a year — sessions are meant to be persistent
     same_site="lax",
 )
+
+# Registered AFTER the session middleware on purpose: the last one added is
+# the OUTERMOST, and only from outside can it see the session cookie being
+# set and mark it Secure.
+app.middleware("http")(_security_headers)
 
 
 def check_deploy_consistency() -> list:
@@ -144,8 +227,7 @@ def check_deploy_consistency() -> list:
     return problems
 
 
-@app.on_event("startup")
-async def _warn_on_half_applied_update():
+def _warn_on_half_applied_update():
     for line in check_deploy_consistency():
         print(f"[deploy] MISMATCH: {line}", flush=True)
     if check_deploy_consistency():
@@ -154,8 +236,7 @@ async def _warn_on_half_applied_update():
               "docker compose up -d", flush=True)
 
 
-@app.on_event("startup")
-async def _start_track_poller():
+def _start_track_poller():
     """Record tracks for active flights even with nobody watching.
 
     The container runs a single uvicorn worker, so this is one poller per
@@ -173,11 +254,47 @@ async def _start_track_poller():
 # ---------------------------------------------------------------------------
 
 def current_pilot(request: Request) -> Optional[dict]:
-    """Returns the logged-in pilot's user row, or None."""
+    """Returns the logged-in pilot's user row, or None.
+
+    THE SESSION EPOCH (1.33.0). A pilot session records the account's
+    `session_epoch` at sign-in. Changing the password bumps it, so every
+    other device's cookie stops being accepted here. Sessions from before
+    this release carry no epoch and are read as 0, which is what every
+    account starts at — so nobody is signed out by the upgrade itself.
+    """
     user_id = request.session.get("user_id")
     if not user_id:
         return None
-    return get_user_by_id(user_id)
+    user = get_user_by_id(user_id)
+    if user is None:
+        return None
+    if int(request.session.get("epoch") or 0) != int(user.get("session_epoch") or 0):
+        request.session.pop("user_id", None)
+        request.session.pop("epoch", None)
+        return None
+    return user
+
+
+def _sign_in_pilot(request: Request, user: dict) -> None:
+    """The ONE way a pilot session starts, so the epoch is never forgotten."""
+    request.session["user_id"] = user["id"]
+    request.session["epoch"] = int(user.get("session_epoch") or 0)
+    request.session.pop("viewer_user_id", None)
+    request.session.pop("viewer_code", None)
+
+
+def _bump_session_epoch(user_id: int) -> int:
+    """Sign out every device on this account. Returns the new epoch."""
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE users SET session_epoch = COALESCE(session_epoch, 0) + 1 "
+                     "WHERE id = ?", (user_id,))
+        conn.commit()
+        row = conn.execute("SELECT session_epoch FROM users WHERE id = ?",
+                           (user_id,)).fetchone()
+        return int(row["session_epoch"]) if row else 0
+    finally:
+        conn.close()
 
 
 def current_viewer_user_id(request: Request) -> Optional[int]:
@@ -1093,6 +1210,28 @@ def build_trip_spans(legs: list, time_format: str = "24") -> list:
     return out
 
 
+
+# ONE username rule for every place a name is chosen (1.33.0). Setup,
+# registration and the settings page each had their own check, and only
+# settings compared case-insensitively — so with sign-up open, "Dave" could
+# register beside an existing "dave" and the two would be told apart by
+# capital letters alone.
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,40}$")
+
+
+def _username_problem(name: str, exclude_id: Optional[int] = None) -> Optional[str]:
+    if not _USERNAME_RE.fullmatch(name or ""):
+        return ("A username needs 3 to 40 characters: letters, numbers, "
+                "dots, dashes or underscores.")
+    conn = get_connection()
+    try:
+        clash = conn.execute(
+            "SELECT 1 FROM users WHERE lower(username) = lower(?) AND id != ?",
+            (name, exclude_id or 0)).fetchone()
+    finally:
+        conn.close()
+    return "That username is already taken." if clash else None
+
 # ---------------------------------------------------------------------------
 # Setup (first-run bootstrap) + login/logout
 # ---------------------------------------------------------------------------
@@ -1117,10 +1256,10 @@ async def setup_post(
         return RedirectResponse(url="/login", status_code=303)
 
     username = username.strip()
-    error = None
-    if len(username) < 3:
-        error = "Username must be at least 3 characters."
-    elif len(password) < 8:
+    error = _username_problem(username)
+    if error:
+        pass
+    elif not (8 <= len(password) <= 200):
         error = "Password must be at least 8 characters."
     elif password != confirm_password:
         error = "Passwords don't match."
@@ -1130,7 +1269,7 @@ async def setup_post(
         return HTMLResponse(template.render(request=request, error=error))
 
     user_id = create_user(username, password, email)
-    request.session["user_id"] = user_id
+    _sign_in_pilot(request, get_user_by_id(user_id))
     code = set_recovery_code(user_id)
     request.session["_pending_recovery_code"] = code
     request.session["_pending_recovery_next"] = "/admin"
@@ -1164,24 +1303,21 @@ async def register_post(
         return HTMLResponse(template.render(request=request, error="Too many attempts. Try again in a bit."), status_code=429)
 
     username = username.strip()
-    error = None
-    if len(username) < 3:
-        error = "Username must be at least 3 characters."
-    elif len(password) < 8:
+    error = _username_problem(username)
+    if error:
+        pass
+    elif not (8 <= len(password) <= 200):
         error = "Password must be at least 8 characters."
     elif password != confirm_password:
         error = "Passwords don't match."
-    elif get_user_by_username(username):
-        error = "That username is already taken."
+    email = (email or "").strip()[:120]
 
     if error:
         template = jinja_env.get_template("register.html")
         return HTMLResponse(template.render(request=request, error=error))
 
     user_id = create_user(username, password, email)
-    request.session["user_id"] = user_id
-    request.session.pop("viewer_user_id", None)
-    request.session.pop("viewer_code", None)
+    _sign_in_pilot(request, get_user_by_id(user_id))
     code = set_recovery_code(user_id)
     request.session["_pending_recovery_code"] = code
     request.session["_pending_recovery_next"] = "/admin"
@@ -1196,7 +1332,12 @@ async def login_pilot(request: Request, username: str = Form(...), password: str
                                            error="Too many attempts. Try again in a few minutes."),
                             status_code=429)
     user = get_user_by_username(username)
-    if not user or not verify_password(password, user["password_hash"]):
+    # Same work whether or not the username exists (1.33.0). Skipping the
+    # hash for an unknown name made a wrong USERNAME answer in a few
+    # milliseconds and a wrong PASSWORD in a few hundred, so response time
+    # alone said which accounts exist.
+    ok = verify_password(password, user["password_hash"] if user else _DUMMY_HASH)
+    if not user or not ok:
         template = jinja_env.get_template("login.html")
         # Hand the username back so a mistyped password doesn't cost you the
         # whole form. The password is deliberately NOT echoed: it would end
@@ -1204,9 +1345,7 @@ async def login_pilot(request: Request, username: str = Form(...), password: str
         # browser's own password manager refills it anyway.
         return HTMLResponse(template.render(request=request, username=username,
                                            error="Incorrect username or password."))
-    request.session["user_id"] = user["id"]
-    request.session.pop("viewer_user_id", None)
-    request.session.pop("viewer_code", None)
+    _sign_in_pilot(request, user)
     return RedirectResponse(url="/admin", status_code=303)
 
 
@@ -1215,12 +1354,27 @@ async def login_code(request: Request, code: str = Form(...)):
     if not check_rate_limit(request, "login_code", max_attempts=15, window_seconds=600):
         template = jinja_env.get_template("login.html")
         return HTMLResponse(template.render(request=request, error="Too many attempts. Try again in a few minutes."), status_code=429)
-    user = get_user_by_share_code(code.strip())
+    # INSTALL-WIDE GUESS CAP (1.33.0). The per-visitor limit above cannot
+    # stop guesses spread across many addresses. This counts WRONG codes
+    # from everyone together; a correct code is never counted, and anyone
+    # already signed in is unaffected, so the worst an attacker can do is
+    # delay a brand-new viewer's first login by an hour.
+    if not ratelimit.global_failures_ok("share_code", CODE_FAILS_PER_HOUR, 3600):
+        template = jinja_env.get_template("login.html")
+        return HTMLResponse(template.render(
+            request=request,
+            error="Code sign-in is paused for a while after too many wrong "
+                  "codes. Please try again in an hour."), status_code=429)
+    # Spaces and dashes are forgiven, so "1234 5678" pasted from a text
+    # message works. Digits only otherwise.
+    code = re.sub(r"[\s\-]", "", code or "")
+    user = get_user_by_share_code(code) if code.isdigit() else None
     if not user:
+        ratelimit.note_failure("share_code")
         template = jinja_env.get_template("login.html")
         return HTMLResponse(template.render(request=request, error="That tracking code doesn't match anyone."))
     request.session["viewer_user_id"] = user["id"]
-    request.session["viewer_code"] = code.strip()
+    request.session["viewer_code"] = code
     request.session.pop("user_id", None)
     return RedirectResponse(url="/", status_code=303)
 
@@ -1270,6 +1424,9 @@ async def forgot_password_post(
     # The recovery code just used is now spent — rotate to a new one and
     # show it, same as at registration.
     user = get_user_by_username(username.strip())
+    # A reset through the recovery code signs out every device too — the
+    # point of a reset is often that somebody else got in.
+    _bump_session_epoch(user["id"])
     new_code = set_recovery_code(user["id"])
     request.session["_pending_recovery_code"] = new_code
     request.session["_pending_recovery_next"] = "/login"
@@ -2259,6 +2416,12 @@ async def feedback_submit(request: Request, message: str = Form(""),
     if not (message or "").strip():
         request.session["_fb_error"] = "Nothing was sent — the message was empty."
         return RedirectResponse(url=back, status_code=303)
+    # Anyone with a share code can post here, so it is limited like every
+    # other form a stranger could reach (1.33.0). Ten an hour is far more
+    # than anyone reporting a real problem sends.
+    if not check_rate_limit(request, "feedback", max_attempts=10, window_seconds=3600):
+        request.session["_fb_error"] = "That is a lot of reports in a short time. Please try again later."
+        return RedirectResponse(url=back, status_code=303)
 
     ok = feedback.submit(
         user_id=user_id, reporter=name, is_viewer=is_viewer, kind=kind,
@@ -3246,9 +3409,15 @@ async def settings_account_save(
     new_username = username.strip()
     new_email = email.strip()
 
-    if len(new_username) < 3:
-        request.session["_settings_error"] = "A username needs at least 3 characters."
-        return RedirectResponse(url="/settings", status_code=303)
+    # The old rule (3+ characters) still applies to a name that is not
+    # being changed, so nobody is locked out of saving their email by a
+    # username chosen before 1.33.0 tightened the format.
+    if new_username != pilot["username"]:
+        problem = _username_problem(new_username, exclude_id=pilot["id"])
+        if problem:
+            request.session["_settings_error"] = problem
+            return RedirectResponse(url="/settings", status_code=303)
+    new_email = new_email[:120]
     # Case-insensitively, because "Dave" and "dave" being two accounts on a
     # household install is a trap rather than a feature. Compared against
     # OTHER rows only — saving the form without touching the name must not
@@ -3314,6 +3483,10 @@ async def settings_password_change(
         conn.commit()
     finally:
         conn.close()
+    # EVERY OTHER DEVICE IS SIGNED OUT (1.33.0); this one stays in. The
+    # usual reason to change a password is that somebody else might know
+    # it, and until now their year-long cookie survived the change.
+    request.session["epoch"] = _bump_session_epoch(pilot["id"])
     # The recovery code is NOT rotated here. It is a separate secret with a
     # separate button, and silently retiring the code a pilot has written
     # down would mean a routine password change quietly destroyed their way
@@ -3439,8 +3612,36 @@ _EMPTY_PNG = base64.b64decode(
     "YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 )
 
+# The only WMS keys Leaflet's tile layer ever sends. Anything else is
+# dropped rather than forwarded, so this route cannot be used to ask IEM
+# for something the map never would.
+_RADAR_KEYS = {"service", "request", "version", "layers", "styles", "format",
+               "transparent", "width", "height", "srs", "crs", "bbox"}
+_RADAR_MAX_PX = 512
+
+
 @app.get("/radar/wms")
-async def radar_wms(request: Request):
+def radar_wms(request: Request):
+    """
+    PLAIN `def`, NOT `async def` (1.33.0). get_tile() makes a blocking
+    `requests.get` with an 8-second timeout and then filters the image with
+    Pillow. Inside an `async def` that ran on the event loop itself, so
+    every radar tile in flight froze EVERY other request in the app — the
+    family's tracker poll included — for as long as IEM took to answer. A
+    map pan requests a dozen tiles at once. Declared plain, FastAPI runs it
+    in a worker thread and nothing else waits. Same rule as invariant 37.
+
+    SIGNED-IN ONLY (1.33.0). It was reachable by anyone, which made this
+    box a free image-processing proxy for the internet. Tiles are requested
+    by the page itself, same-origin, so the session cookie rides along and
+    nobody signed in notices.
+    """
+    if not (current_pilot(request) or current_viewer_user_id(request)):
+        return Response(status_code=401)
+    return _radar_tile(request)
+
+
+def _radar_tile(request: Request):
     """Radar tiles, fetched from IEM and filtered before they are served.
 
     Sits in front of IEM rather than letting the browser talk to it
@@ -3455,11 +3656,20 @@ async def radar_wms(request: Request):
     point of the page and it must not break because a weather service is
     down.
     """
-    params = dict(request.query_params)
+    raw = dict(request.query_params)
     try:
-        min_level = int(params.pop("min", "0") or 0)
+        min_level = max(0, min(9, int(raw.pop("min", "0") or 0)))
     except ValueError:
         min_level = 0
+    params = {k: v[:200] for k, v in raw.items() if k.lower() in _RADAR_KEYS}
+    # Tile size is clamped: a request for a 20,000-pixel image would be
+    # decoded in full by Pillow, which is a memory problem, not a picture.
+    for k in list(params):
+        if k.lower() in ("width", "height"):
+            try:
+                params[k] = str(max(1, min(_RADAR_MAX_PX, int(params[k]))))
+            except ValueError:
+                params[k] = "256"
 
     body = radar_proxy.get_tile(params, min_level)
     if body is None:
@@ -3516,6 +3726,15 @@ async def service_worker():
 # keeps working instead of going blank. Adding a field is not a break and
 # does not need a new version. See app/version.py.
 
+def _API_UNAUTHENTICATED():
+    """401, not 200 (1.33.0). The body is unchanged, so anything reading
+    `.error` still works — but a native client, the service worker and the
+    page can now tell "you are signed out" from a successful answer by the
+    status alone. It also stops the service worker caching a signed-out
+    reply as if it were good data."""
+    return JSONResponse({"error": "not authenticated"}, status_code=401)
+
+
 @app.get("/api/v1/meta")
 async def api_meta(client: Optional[str] = None):
     """What this server is, and whether the caller is new enough to talk to it.
@@ -3553,7 +3772,7 @@ async def api_current(request: Request):
     viewer_uid = None if pilot else current_viewer_user_id(request)
     user_id = pilot["id"] if pilot else viewer_uid
     if not user_id:
-        return {"error": "not authenticated"}
+        return _API_UNAUTHENTICATED()
     info = get_current_info(user_id)
     return info.model_dump(mode="json")
 
@@ -3570,7 +3789,7 @@ async def api_selected(request: Request, leg: Optional[str] = None):
     viewer_uid = None if pilot else current_viewer_user_id(request)
     user_id = pilot["id"] if pilot else viewer_uid
     if not user_id:
-        return {"error": "not authenticated"}
+        return _API_UNAUTHENTICATED()
 
     settings = load_settings(user_id)
     info = get_current_info(user_id)
@@ -3637,7 +3856,7 @@ async def api_leg(request: Request, leg_id: str):
     viewer_uid = None if pilot else current_viewer_user_id(request)
     user_id = pilot["id"] if pilot else viewer_uid
     if not user_id:
-        return {"error": "not authenticated"}
+        return _API_UNAUTHENTICATED()
 
     settings = load_settings(user_id)
     info = get_current_info(user_id)

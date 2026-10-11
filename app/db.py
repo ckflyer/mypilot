@@ -485,6 +485,13 @@ def init_db() -> None:
             # Defaults to the indigo every install already had, so an
             # upgrade changes nothing until somebody chooses otherwise.
             ("accent", "TEXT DEFAULT 'indigo'"),
+            # 1.33.0. Bumped whenever the password changes. Every pilot
+            # session carries the number it was signed in under, and a
+            # session holding an older number is no longer accepted — so a
+            # password change signs out every OTHER device. Before this a
+            # login cookie lasted a year whatever happened to the password,
+            # which meant changing it after losing a phone did nothing.
+            ("session_epoch", "INTEGER DEFAULT 0"),
         ]:
             if name not in ucols:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {name} {decl}")

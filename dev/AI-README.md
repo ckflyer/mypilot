@@ -228,57 +228,21 @@ and say so before editing — that has already cost a working feature once.
    file before guessing. VERSION also keys the service worker cache, so
    skipping the bump means phones keep serving the old build.
 2. Add a `## VERSION HISTORY` entry at the top of it.
-3. Update `## STATE` and `## OPEN`.
-4. Record any bug you hit and how it was diagnosed.
-5. Run all EIGHT test suites. Package only if all pass.
-6. Never ship `data/*.db` or `data/secret_key.txt`. Check the packaged
-   zip, not just the working tree — a test run recreates both.
+3. Update `## STATE
 
-**Owner context:** no programming background. Explain reasoning in prose in
-chat, not jargon. He is a line pilot and is the authority on operational
-questions (what "delayed" means, when a flight is over) — ask him rather
-than inferring. He has caught two real bugs by inspection; take his hunches
-seriously.
+**v1.33.1.** Renamed to MyPilot in 1.0.0. Deployed on TrueNAS via Dockge,
+reached from outside through a Cloudflare tunnel. Multi-user, sign-up
+open: the owner plus several FOs, who fly the same legs — hence shared
+flight rows (v5.1, retained).
 
-**Deploy workflow:** he drops extracted files into a GitHub repo, runs
-`git pull` on TrueNAS, then `update.sh` via Dockge.
+Tests: fifteen suites, all passing. The count is whatever
+`bash dev/run_tests.sh` prints — it is not restated here, for the reason
+recorded in TESTS.
 
-### WHERE THINGS LIVE (1.31.0)
-
-```
-<root>/     DEPLOYED. app/ templates/ static/ data/, Dockerfile,
-            docker-compose.yml, requirements.txt, update.sh, README.md
-dev/        NOT DEPLOYED. Excluded from the Docker image by
-            .dockerignore, but tracked in git.
-  AI-README.md   this file
-  tests/         every suite
-  tools/         one-off checkers, the icon generator
-  run_tests.sh   runs everything
-  BACKUP.md
-```
-
-**The test is whether a file is needed to serve a request.** If it is
-not, it belongs under `dev/`. Before 1.31.0 the suites sat at the project
-root and `COPY . .` baked about 350KB of them into every image.
-
-Tests resolve paths from `PROJECT_ROOT`, defined at the top of each file
-as two directories up. A new test file must define it the same way, or it
-will look for `templates/` inside `dev/tests/` and fail confusingly.
-
-`README.md` is for somebody RUNNING the app. This file is for somebody
-BUILDING it. Keep the first readable by a non-programmer; keep this one
-exhaustive. Where they contradict each other, this one is right and the
-other gets corrected.
-
-## STATE
-
-**v1.30.0.** Renamed to MyPilot in 1.0.0. Deployed on TrueNAS via Dockge.
-Multi-user: the owner plus several FOs, who fly the same legs — hence
-shared flight rows (v5.1, retained).
-
-Tests: **2,407**, fourteen suites, all passing. Run them with
-`bash dev/run_tests.sh` — never from a hand-written list, for the
-reason recorded in TESTS.
+**1.33.0 was a security pass plus a data-loss fix.** Flown flights had
+been deleted after 30 days since 1.0.0; that is fixed, but anything lost
+before it is gone unless a backup exists. The security work is listed in
+the 1.33.0 entry and summarised for the owner in README → SECURITY.
 
 **THE v1.26–v1.29.2 HISTORY IS RECONSTRUCTED, NOT RECORDED.** Five
 releases shipped without VERSION HISTORY entries, exactly as v6.4–v7.4
@@ -304,6 +268,25 @@ using this app is the PARSER — see ROADMAP P0-7. Everything else on the
 list is polish by comparison.
 
 ## OPEN
+
+- **Legacy 5-digit share codes still work.** By design (owner's call,
+  1.33.0: one system, not two) — new codes are 8 digits, old ones resolve
+  through the same lookup. They are the weakest credential on the
+  install; the install-wide guess cap is what protects them. Nudge the
+  owner to replace them on /flights rather than ever forcing it.
+- **No script-level Content-Security-Policy.** 1.33.0 sends
+  `frame-ancestors 'none'` only. A real CSP needs every inline `<script>`
+  moved into files, which is P0-6 — do them together.
+- **The AeroAPI key is stored in plain text** in the users table. The app
+  must send it to FlightAware, so hashing is impossible; encrypting it
+  with the session key would only move the secret next to the key. The
+  real protection is the `data/` folder and its backups.
+- **Docker runs as root inside the container.** Changing it risks
+  permission errors on the bind-mounted TrueNAS dataset the owner cannot
+  easily debug. Worth doing alongside a backup/restore rehearsal, not
+  casually.
+- **The slide and gesture fixes in 1.33.0 are verified in Chromium only.**
+  Invariant 52/57: the owner's iPhone is the real test. Ask.
 
 - **`app/main.py` is ~3,300 lines.** It was ~1,300 when this line first
   said it needed auditing. It holds routes, rendering, four separate view
@@ -837,6 +820,12 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     real-world flight, and deleting on it destroyed real data every time a
     test schedule was imported. Un-rostered rows age out at
     `RETENTION_DAYS` with everything else. Nothing polls them meanwhile.
+    **And retention is decided in ONE place** (1.33.0): `purge_old`
+    judges every row by its scheduled date against `RETENTION_DAYS`. A
+    second number in another module — `closure.KEEP_DAYS = 30`, stamped
+    into `purge_after` — silently overrode the year for every closed leg
+    from 1.0.0 to 1.32.0. `purge_after` is written for information only
+    and is never read.
 17. **A closure rule is worthless unless something still asks it.** Every
     route in `closure.decide` assumed the leg is judged forever; selection
     stopped judging at scheduled arrival + 3h, and three of the five routes
@@ -1142,6 +1131,34 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     the uncertainty was invisible. A fact worth storing is usually a fact
     worth marking at the point somebody relies on it. (1.32.0)
 
+54. **A setting with two homes is a setting with one silent override.**
+    Retention was "365 days" in flights.py, the README, the compose file
+    and a test — and 30 days in closure.py, which is the one that won. Each
+    of the four places was internally correct. When a rule is raised,
+    grep for every number that ALSO decides it, not just the constant with
+    the obvious name. (1.33.0)
+
+55. **Never run blocking work in an `async def` route.** `requests.get`,
+    Pillow, PBKDF2 and SQLite under a lock all block. Inside `async def`
+    they block the event loop, which is every other request in the app.
+    Routes that call out to the network are plain `def` (diagnostics
+    panel since 1.30.0, radar since 1.33.0) so FastAPI runs them in a
+    worker thread. Invariant 37 was the first instance; this is the rule.
+
+56. **A header is a claim, not a fact.** `CF-Connecting-IP` and
+    `X-Forwarded-For` are set by whoever sends the request. Believed from
+    anywhere, the login limiter could be dodged by claiming a new address
+    each time. They are trusted only from a private-network peer (the
+    tunnel). The same goes for anything else a client can type. (1.33.0)
+
+57. **Safari animates only from a frame it has PAINTED.** Invariant 52's
+    CSS-only fix (visibility timing) was correct on paper and still
+    teleported on the owner's iPhone. What works: show the element at its
+    start position, wait two animation frames, then apply the end state —
+    and do not focus() anything inside it until the transition has
+    finished, because focus forces Safari to settle layout at once.
+    (1.33.0)
+
 ## MODULE MAP
 
 ```
@@ -1213,6 +1230,7 @@ unrelated to what it tests.
 | `tests_test_mode.py` | simulator isolation (no spend, no ADS-B, no real writes), each scenario, admin promotion + password gate, the one-aeroplane rule, the diagnostics panel |
 | `tests_radar_filter.py` | weather radar proxy: tile filtering and what is refused |
 | `tests_reserve_days.py` | reserve days surviving an import, and how they draw |
+| `tests_release_133.py` | retention leak, radar route, trusted-proxy IP, 8-digit codes + install-wide guess cap, session epoch, security headers, API 401, username rule, the arrived-bar hold, tail number row, admin inbox span, share sign-up link, slide staging, gesture lock, the bar above the tabs |
 
 **THE COUNT LIVES IN ONE PLACE: the runner's own output.** It used to be
 written in two prose sections that disagreed by the time anyone checked.
@@ -1287,6 +1305,163 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.33.1 — the sign-up link, for everyone
+
+Owner's follow-up to 1.33.0: the Share sign-up link button should be
+visible to EVERYONE, on Settings, not to admins only. Moved from Admin →
+People to a new "Share → Invite a pilot" row on Settings, shown to pilots
+and family viewers alike, outside the collapsible rows so the button needs
+no tap to find. Family are often the ones who know another crew family.
+No new exposure: sign-up is open by design, so the link grants nothing
+`/register` did not already. Admin's People hint now points to it.
+
+### 1.33.0 — a year means a year, and a security pass
+
+Two halves: an audit of 1.32.0 (requested by the owner, findings saved to
+the claude.ai project as `claude/audit-1.32.0.md`), and four inbox reports
+plus three things the owner reported directly.
+
+**THE DATA LOSS.** `closure.py` stamped every closed leg with
+`purge_after = closed_at + KEEP_DAYS (30)`, and `flights.purge_old`
+deleted any row past its stamp. 1.0.0 raised retention to 365 days in
+flights.py and track.py and never touched closure, so the year applied
+only to legs that never closed — almost none. Every flown leg, with its
+gates, times and track, was deleted a month after landing, every six
+hours, while the README, the compose file and a test all said 365.
+Reproduced before fixing: a leg closed 40 days ago was removed with
+`RETENTION_DAYS = 365`. `PT_RETENTION_DAYS=0`, documented as "forever",
+put the cutoff at today and would have deleted every past flight.
+
+Fix: `purge_old` judges every row by its scheduled date, and 0 or less
+returns immediately (track pruning too). `purge_after` is still written,
+from `RETENTION_DAYS`, but never read — the 30-day stamps already on the
+owner's rows stop mattering the moment this deploys. Anything deleted
+before it can only come back from a backup. Invariants 14 (extended)
+and 54.
+
+**THE RADAR FROZE THE SERVER.** `/radar/wms` was `async def` around a
+blocking `requests.get` (8 s timeout) and Pillow. Every tile in flight
+stalled every other request, the family's poll included; a map pan asks
+for a dozen. Now plain `def` (invariant 55), signed-in only, and the
+query is whitelisted to the WMS keys Leaflet sends, with tile size capped
+at 512 px so nobody can ask Pillow to decode a 20,000-pixel image.
+
+**SECURITY PASS** (owner: "this will be a real app, there is sensitive
+info about someone's whereabouts — start being secure now"):
+
+- *Trusted proxy* (invariant 56). `get_client_ip` believed
+  `CF-Connecting-IP` / `X-Forwarded-For` from anyone, so the login limit
+  could be dodged by claiming a new address per request. Now trusted only
+  from a private-network peer. `PT_TRUST_PROXY_HEADERS` overrides.
+- *Share codes.* Five digits is 100,000 codes — days to guess even rate
+  limited. New codes are 8 digits. **The owner's condition: "don't want
+  two system logics."** So nothing else changed: same table, same lookup,
+  old 5-digit codes keep working, only the generator is longer. The login
+  box accepts either length and forgives a pasted space or dash.
+  REJECTED: forcing every code to 8 digits now (signs every family out),
+  and letters-plus-digits codes (harder to read aloud over a phone).
+- *Install-wide guess cap.* Per-visitor limits do nothing against guesses
+  spread over many addresses. Forty WRONG codes in an hour, from
+  everyone, pauses code sign-in for an hour. Correct codes are never
+  counted; signed-in viewers are unaffected; the worst an attacker can do
+  is delay a new viewer's first login.
+- *Session epoch.* `users.session_epoch`, carried in the pilot session.
+  A password change or recovery-code reset bumps it, signing out every
+  other device; the device that changed it stays in. Old sessions read as
+  0, which every account starts at, so the upgrade signs out nobody. All
+  pilot sign-ins go through `_sign_in_pilot` so the epoch cannot be
+  forgotten.
+- *Headers* (`_security_headers`, registered OUTERMOST so it can see the
+  session cookie): nosniff, frame-ancestors 'none' + X-Frame-Options,
+  Referrer-Policy same-origin, Permissions-Policy denying camera, mic,
+  location. Over https (Cloudflare) only: HSTS, and `Secure` added to the
+  cookie. REJECTED: `https_only=True` on SessionMiddleware — it would
+  break the owner's LAN address (`http://<nas-ip>:8000`).
+- *Timing.* An unknown username now pays for a hash (`_DUMMY_HASH`), so
+  response time no longer says which accounts exist.
+- *Usernames.* One rule (`_username_problem`) for setup, sign-up and
+  settings: 3–40 of letters, digits, `.`, `_`, `-`, compared
+  case-insensitively. Only settings compared case-insensitively before,
+  so with sign-up open "Dave" could register beside "dave".
+- *Sign-up stays open* (owner's decision). It was already rate limited;
+  the trusted-proxy fix is what makes that limit real.
+- *Feedback* rate limited (10/hour/visitor) — viewers can post to it.
+- *API 401.* Signed-out `/api/*` calls were 200 with an error body, which
+  the service worker cached as a good answer and a native client could
+  not tell from success. Now 401, same body; the tracker sends the reader
+  to sign-in on a 401 (a revoked code used to leave a frozen map).
+- *Offline cache.* The sign-in page deletes the service worker's cached
+  tracker data — somebody's whereabouts — so the next person on a shared
+  device cannot read it with the network off.
+- *ADS-B text* (icao24, callsign) escaped before reaching innerHTML.
+- *last_seen_at* on share codes written at most every five minutes, not
+  on every poll of every viewer.
+- *Pinned requirements* and the poller started from `lifespan` instead of
+  the deprecated `@app.on_event`. A future FastAPI dropping the old hook
+  would have left an app that loads every page and tracks nothing.
+
+LOOKED AT AND LEFT, each in OPEN with the reason: a script CSP (needs
+P0-6 first), encrypting the AeroAPI key (it must be sent in clear to
+FlightAware), non-root Docker (TrueNAS permissions risk).
+
+**REPORT #11 — tail number into the flight details, kept.** The aircraft
+sat inside the Live ADS-B box, so it vanished whenever the live feed did:
+at landing, at a gate with no coverage, on every past flight. It was
+already STORED (`tail_api`, else `tail_adsb`, both blank-guarded); only
+the display was wrong. Now an "Aircraft" row in the flight's own details,
+shown from first sighting for as long as the flight is kept. The poll may
+only show or update it; only switching flights may clear it, so a poll
+that happens to lack the field cannot blank a known tail.
+
+**REPORT #10 — share the sign-up link.** Admin → People, same share-sheet
+pattern as the family codes. Text and url are passed separately because
+iOS appends the url itself and printed it twice otherwise.
+
+**REPORT #9 — `<span class="alert">5 new</span>` as text.** In
+`(A) if x else (B) | safe` the filter binds to B only, so the half with
+markup was escaped. Parenthesised; own `.grow-alert` class.
+
+**REPORT #8 — the bar after landing.** The strip stayed full on EVERY
+arrived leg, forever, including flights tapped from last week. Owner's
+call: hide it, but show 100% for a while after landing first. Now one
+rule — the bar is drawn iff `progress_pct` is a number — and
+`view._shown_progress` decides: live measurement while open; 100 for
+`ARRIVED_BAR_HOLD` (30 min, the LEG_SETTLE window) after TOUCHDOWN
+(airline wheels-on, else observed, else gate-in, else close time); then
+None. Measured from touchdown so a backstop close three hours later does
+not re-show a bar. The "or Arrived" special case is deleted from both the
+template and the poll. Invariant 9 gains its one owner-approved exception.
+
+**OWNER — list scroll dragged the map too.** iOS ignores
+`overflow:hidden` on <body> for touch, so a drag running off the list was
+handed to the page. Two fixes: the body is pinned (`position:fixed;
+inset:0`) when the sheet is live, and a document-level capture listener
+disables Leaflet drag/pinch while a finger that started on the list,
+panel or tab pill is down ("whichever moved first owns it").
+
+**OWNER — the slide still teleported.** 1.32.0's CSS-only fix did not
+work on his iPhone. Now: `.staging` (visible, still off-screen, no
+transition) → force style → two animation frames → `.open`; focus waits
+320 ms for the slide to finish (invariant 57). Verified in Chromium by
+sampling the computed transform every frame: 443 px → 0 over ~300 ms.
+NOT yet verified on an iPhone — see OPEN.
+
+**OWNER — the white bar above the tab pill.** `.sheet` reserved
+`46px + safe-area` of padding in the sheet's own colour, and rows
+scrolled under it. That room is now bottom padding INSIDE `.sheet-body`,
+so rows slide on under the floating pill and the last one still scrolls
+clear.
+
+**Also:** `tests_test_mode` skips its two icon-artwork checks when the
+dev-only `cairosvg` is missing instead of crashing the whole suite;
+`.env.example` no longer lists OpenSky credentials nothing reads; the
+poller's purge log line no longer says "30-day".
+
+Tests: new `tests_release_133.py` (64 checks). Four older assertions were
+rewritten, not deleted, because they pinned the exact text of rules this
+release changed on purpose: the strip's "or Arrived" gate (2) and the
+`body.has-sheet` one-liner (2).
 
 ### 1.32.0 — the first release built from user feedback
 

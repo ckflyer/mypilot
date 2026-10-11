@@ -56,7 +56,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from . import debuglog
-from .flights import get_flight, write
+from .flights import RETENTION_DAYS, get_flight, write
 from .tags import PHASE_ARRIVED, STATUS_CANCELLED, STATUS_DIVERTED
 
 # An aircraft that has actually blocked in goes quiet — engines and
@@ -84,8 +84,11 @@ SOURCE_BACKSTOP = "backstop"
 # An airline gate-in may replace any of these after the fact.
 UPGRADEABLE = {SOURCE_RELAUNCH, SOURCE_OBSERVED, SOURCE_BACKSTOP}
 
-# How long a closed flight stays visible before the 30-day purge takes it.
-KEEP_DAYS = 30
+# KEEP_DAYS (30) is GONE (1.33.0). It stamped `purge_after` on every closed
+# leg, and flights.purge_old deleted on that stamp — so flown legs lived 30
+# days while the README promised a year. Retention is decided in ONE place
+# now, flights.RETENTION_DAYS, and `purge_after` is written only as a
+# record of when that rule will take the row.
 
 
 def _parse(value) -> Optional[datetime]:
@@ -252,7 +255,8 @@ def close(leg, row, closed_by: str, closed_at: datetime,
             "closed_at": closed_at.isoformat(),
             "closed_by": closed_by,
             "arrival_source": _arrival_source(row, closed_by),
-            "purge_after": (closed_at + timedelta(days=KEEP_DAYS)).isoformat(),
+            "purge_after": ((closed_at + timedelta(days=RETENTION_DAYS)).isoformat()
+                            if RETENTION_DAYS > 0 else None),
             # Progress and time-to-go stop meaning anything on a finished
             # flight, so they are cleared rather than frozen at whatever
             # the last poll happened to compute. A past flight shows no

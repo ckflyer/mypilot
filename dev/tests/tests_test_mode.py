@@ -434,11 +434,20 @@ check("...and the fine detail is dropped at favicon size, not shrunk to mush",
 # "if maskable:" in the file, which is a fact about formatting rather than
 # about what gets drawn, and it failed while the code was correct.
 _ns = {"__file__": os.path.join(PROJECT_ROOT, "dev", "tools", "make_icons.py")}
-exec(compile(icons.split("written = []")[0], "make_icons.py", "exec"), _ns)
-check("maskable icons carry NO artwork, since Android crops them",
-      "stroke-dasharray" not in _ns["icon_svg"]("modern", 512, maskable=True))
-check("...while the ordinary tile does have it",
-      "stroke-dasharray" in _ns["icon_svg"]("modern", 512))
+# make_icons.py imports cairosvg, a dev-only drawing library that is not in
+# requirements.txt (the app never draws icons; the PNGs are committed). On
+# a machine without it, these two checks are SKIPPED with a note rather
+# than crashing the whole suite — which is what happened on a fresh
+# checkout until 1.33.0. `pip install cairosvg` to run them.
+try:
+    exec(compile(icons.split("written = []")[0], "make_icons.py", "exec"), _ns)
+except ImportError as _e:
+    print(f"  skip  icon artwork checks ({_e}); pip install cairosvg to run them")
+else:
+    check("maskable icons carry NO artwork, since Android crops them",
+          "stroke-dasharray" not in _ns["icon_svg"]("modern", 512, maskable=True))
+    check("...while the ordinary tile does have it",
+          "stroke-dasharray" in _ns["icon_svg"]("modern", 512))
 check("the backdrop scales with the icon rather than being fixed",
       icons.count("u = px / 64.0") >= 1 and "{32*u:" in icons)
 check("the plane sits on the arc apex, not centred in the square",

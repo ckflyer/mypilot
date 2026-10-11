@@ -37,7 +37,7 @@ MIN_POINT_SEPARATION_NM = 0.12
 
 # Kept in step with flights.RETENTION_DAYS (v7.5). A track outliving its
 # flight row, or vice versa, is how half-deleted legs happen.
-TRACK_RETENTION_DAYS = int(os.environ.get("PT_RETENTION_DAYS") or 365)
+TRACK_RETENTION_DAYS = int(os.environ.get("PT_RETENTION_DAYS") or 365)  # same env, same default as flights.RETENTION_DAYS
 MIN_SPEED_KTS_FOR_ETA = 20  # ignore near-zero groundspeed so ETE can't spike
 
 _prune_lock = threading.Lock()
@@ -46,6 +46,10 @@ PRUNE_INTERVAL_S = 3600.0
 
 
 def prune_old_positions(retention_days: int = TRACK_RETENTION_DAYS) -> int:
+    # 0 or negative = keep forever, the same rule as flights.purge_old.
+    # Without this a 0 put the cutoff at "now" and wiped every track.
+    if retention_days <= 0:
+        return 0
     cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
     conn = get_connection()
     try:

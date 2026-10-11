@@ -778,7 +778,7 @@ def test_flight_sheet():
     # scrollbar from CSS: if the script then dies, there is no sheet
     # scrolling AND no page scrolling, and the schedule is unreachable.
     check("the page's scrollbar is not killed by CSS alone",
-          "body.has-sheet { overflow: hidden; }" in html
+          "body.has-sheet {\n      overflow: hidden;" in html
           and "\n    body { overflow: hidden" not in html)
     check("...the script opts in only once it is alive",
           "document.body.classList.add('has-sheet');" in html)
@@ -1645,7 +1645,11 @@ def test_map_cannot_steal_the_scroll():
     code = re.sub(r"\{#.*?#\}", "", code, flags=re.S)
 
     check("the shield is gone", "map-shield" not in code)
-    check("the document no longer scrolls", "body.has-sheet { overflow: hidden; }" in html)
+    check("the document no longer scrolls", "body.has-sheet {\n      overflow: hidden;" in html)
+    # 1.33.0: overflow:hidden alone does not stop iOS scrolling the page
+    # under a drag that leaves the list; the body is pinned as well.
+    check("...and is PINNED, which is what iOS actually obeys",
+          "position: fixed; inset: 0;" in html.split("body.has-sheet {", 1)[1][:200])
     check("...and the only scroller is the sheet's own body",
           ".sheet-body {" in html and "overflow-y: auto" in html)
     # The strip of map ABOVE the card is still pannable — that was true of
@@ -2804,7 +2808,7 @@ def test_a_half_applied_update_announces_itself():
     # will not.
     src = open(os.path.join(here, "app", "main.py"), encoding="utf-8").read()
     guard = src[src.find("def check_deploy_consistency"):]
-    guard = guard[:guard.find("@app.on_event(\"startup\")\nasync def _start_track")]
+    guard = guard[:guard.find("def _start_track_poller")]
     check("the guard never exits the process",
           "sys.exit" not in guard and "raise SystemExit" not in guard)
 

@@ -13,7 +13,7 @@ import binascii
 import hashlib
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -125,7 +125,13 @@ def _generate_unique_share_code(conn) -> str:
     this whole feature exists to prevent.
     """
     for _ in range(50):
-        code = f"{secrets.randbelow(100_000):05d}"
+        # EIGHT DIGITS for every code made from 1.33.0 on (was five).
+        # One system, not two: an 8-digit code is the same kind of row in
+        # the same table, resolved by the same lookup. Codes already handed
+        # out keep working exactly as before; only NEW codes are longer.
+        # Five digits is 100,000 possibilities — guessable in days even
+        # behind rate limits. Eight is a thousand times that.
+        code = f"{secrets.randbelow(10 ** SHARE_CODE_DIGITS):0{SHARE_CODE_DIGITS}d}"
         taken = conn.execute(
             "SELECT 1 FROM users WHERE share_code = ? "
             "UNION ALL SELECT 1 FROM share_codes WHERE code = ?",
@@ -136,6 +142,8 @@ def _generate_unique_share_code(conn) -> str:
     # loop forever.
     raise RuntimeError("could not generate a unique share code")
 
+
+SHARE_CODE_DIGITS = 8
 
 RECOVERY_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"  # no 0/O/1/I/L — avoids ambiguous chars
 
@@ -373,9 +381,17 @@ def get_user_by_share_code(code: str) -> Optional[Dict[str, Any]]:
             (code, today)).fetchone()
         if row is None:
             return None
-        conn.execute("UPDATE share_codes SET last_seen_at = ? WHERE code = ?",
-                     (_now_iso(), code))
-        conn.commit()
+        # AT MOST EVERY FIVE MINUTES (1.33.0). This runs on every request a
+        # viewer makes, including the tracker's poll every few seconds, and
+        # it used to write — and fsync — the database each time just to
+        # move a "last seen" stamp nobody reads to the second.
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        cur = conn.execute(
+            "UPDATE share_codes SET last_seen_at = ? WHERE code = ? "
+            "AND (last_seen_at IS NULL OR last_seen_at < ?)",
+            (_now_iso(), code, cutoff))
+        if cur.rowcount:
+            conn.commit()
     finally:
         conn.close()
     return dict(row)

@@ -388,12 +388,19 @@ def main():
     check("it says so when logging is off", "Logging is off" in dbg)
 
     print("\nProgress strip hides when there is no progress")
-    check("the server-rendered strip is gated",
-          "current.progress_pct is not none or current.phase_tag == 'Arrived'" in viewer)
+    # ONE RULE since 1.33.0 (report #8): the strip shows when there is a
+    # percentage, full stop. The old "or Arrived" half kept a full bar on
+    # every landed leg forever; the server now sends 100 for half an hour
+    # after touchdown and None after that (view._shown_progress).
+    check("the server-rendered strip is gated on the percentage alone",
+          "style=\"{{ '' if current.progress_pct is not none else 'display:none' }}\">" in viewer)
     # Without the matching JS rule the strip renders hidden and is then
     # un-hidden, empty, by the first poll.
     check("the live update applies the same rule",
-          "wrap.style.display = (known || phaseTag === 'Arrived')" in viewer)
+          "wrap.style.display = known ? '' : 'none'" in viewer)
+    check("...and nothing keeps a full bar on an arrived leg any more",
+          "phase_tag == 'Arrived') else 'display:none'" not in viewer
+          and "(known || phaseTag === 'Arrived')" not in viewer)
 
     # -- every form posts somewhere that EXISTS ---------------------------
     #
