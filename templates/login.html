@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.32.0 -->
+<!-- BUILT_FOR 1.33.1 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -40,7 +40,7 @@
       margin-bottom: 0.85rem;
     }
     input[name="code"] {
-      letter-spacing: 0.4em;
+      letter-spacing: 0.2em;
       font-size: 1.4rem;
       text-align: center;
       font-variant-numeric: tabular-nums;
@@ -101,12 +101,30 @@
     <div class="card">
       <h2>Viewer access</h2>
       <form method="post" action="/login/code">
-        <label for="code">5-digit tracking code</label>
-        <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]*" maxlength="5" autocomplete="off" required>
+        <label for="code">Tracking code</label>
+        {#- 5 OR 8 digits (1.33.0). New codes are 8; older 5-digit codes
+            still work, through the same lookup. maxlength leaves room for a
+            space or dash pasted from a text message, which the server
+            strips. -#}
+        <input type="text" id="code" name="code" inputmode="numeric" maxlength="12" autocomplete="off" required>
         <button type="submit">View flights</button>
       </form>
     </div>
   </div>
 {% include "partials/sw_register.html" %}
+<script>
+  // FORGET THE LAST PERSON'S FLIGHTS (1.33.0). The service worker keeps
+  // the last good tracker data so the app has something to show offline.
+  // Arriving at the sign-in page means nobody is signed in on this device,
+  // so that copy — somebody's whereabouts — is deleted rather than left
+  // for the next person to pick up with the network off.
+  try {
+    if (window.caches && caches.keys) {
+      caches.keys().then(function (names) {
+        names.forEach(function (n) { if (n.indexOf('mypilot-api') === 0) caches.delete(n); });
+      });
+    }
+  } catch (e) {}
+</script>
 </body>
 </html>

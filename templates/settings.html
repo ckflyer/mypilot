@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.32.0 -->
+<!-- BUILT_FOR 1.33.1 -->
 <html lang="en" data-theme="{{ s.theme }}" data-accent="{{ s.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -91,6 +91,17 @@
       border: none; border-radius: 9px; font-weight: 600;
       cursor: pointer; font-size: 0.9rem;
     }
+    .share-invite {
+      display: flex; align-items: center; gap: 0.9rem;
+      padding: 0.8rem 0.9rem;
+    }
+    .share-invite-text { flex: 1 1 auto; min-width: 0; }
+    .share-invite-title { font-weight: 600; }
+    .share-invite-sub { font-size: 0.8rem; color: var(--muted); margin-top: 0.15rem; }
+    #share-register {
+      flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.4rem;
+    }
+    #share-register svg { width: 16px; height: 16px; flex: 0 0 auto; }
     button.ghost {
       padding: 0.6rem 1rem; background: transparent; color: var(--accent);
       border: 1px solid var(--border); border-radius: 9px;
@@ -199,6 +210,27 @@
       the way in, because a page served from a stale cache would report a
       stale version, and the stale-cache case is exactly when the version
       matters. -#}
+  {#- INVITE A PILOT (report #10; moved from Admin to here in 1.33.1).
+      On Settings rather than Admin because the owner wants EVERYONE to be
+      able to pass it on — any pilot, and family viewers too, who are often
+      the ones who know another crew family that would want it. Shown
+      outside the collapsible rows so the button is visible without a tap.
+      The link is built from the address this page was opened on, so it is
+      the Cloudflare address when you are on it. Sign-up is open by design
+      (1.33.0), so sharing it grants nothing beyond what /register already
+      allows. -#}
+  <div class="seclabel">Share</div>
+  <div class="glist">
+    <div class="share-invite">
+      <div class="share-invite-text">
+        <div class="share-invite-title">Invite a pilot</div>
+        <div class="share-invite-sub">Send another crew member the sign-up link so their family can follow them too.</div>
+      </div>
+      <button type="button" class="primary" id="share-register"
+              data-path="/register">{% include "partials/share_glyph.html" %}<span>Share</span></button>
+    </div>
+  </div>
+
   <div class="seclabel">Help</div>
   <div class="glist">
     <details class="grow" {% if open_group == 'feedback' %}open{% endif %}>
@@ -513,6 +545,32 @@
         btn.textContent = original + ' — unsaved changes';
       });
     }
+  })();
+
+  // Invite a pilot: share the sign-up link (report #10, 1.33.1).
+  // The phone's own share sheet where there is one, the clipboard where
+  // there is not. Text and url go separately — iOS appends the url itself,
+  // so putting it in the text as well printed it twice.
+  (function () {
+    var btn = document.getElementById('share-register');
+    if (!btn) return;
+    btn.addEventListener('click', async function () {
+      var url = window.location.origin + btn.getAttribute('data-path');
+      var text = 'Create your MyPilot account so your family can follow your trips:';
+      if (navigator.share) {
+        try { await navigator.share({ title: 'MyPilot', text: text, url: url }); return; }
+        catch (e) { if (e && e.name === 'AbortError') { return; } }
+      }
+      var label = btn.querySelector('span');
+      try {
+        await navigator.clipboard.writeText(url);
+        var was = label.textContent;
+        label.textContent = 'Copied';
+        setTimeout(function () { label.textContent = was; }, 1500);
+      } catch (e) {
+        window.prompt('Copy this link and send it:', url);
+      }
+    });
   })();
 </script>
   {% include "partials/tabbar.html" %}

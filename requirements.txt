@@ -1,12 +1,26 @@
-fastapi>=0.140
-uvicorn>=0.50
-python-multipart
-airportsdata
-pydantic>=2
-jinja2
-tzdata
-requests
+# EXACT VERSIONS, ON PURPOSE (1.33.0).
+#
+# These used to be `>=` or bare names, which means "whatever is newest the
+# day the image is rebuilt". update.sh rebuilds the image, so any deploy
+# could silently pull a release that changes behaviour underneath the app —
+# FastAPI has already deprecated the startup hook the poller used to rely
+# on, and a version that removed it would have stopped tracking with no
+# error anywhere. Pinned, a deploy changes only what the release changed.
+#
+# These are the versions the full test suite passed against. To upgrade,
+# change a number here, run `bash dev/run_tests.sh`, and ship it as its own
+# release so a problem points at one cause.
+fastapi==0.143.0
+starlette==1.6.0
+uvicorn==0.53.0
+python-multipart==0.0.32
+airportsdata==20260905
+pydantic==2.13.5
+jinja2==3.1.6
+markupsafe==3.0.3
+tzdata==2026.5
+requests==2.34.2
 # Pillow: the radar proxy filters tiles with it (app/radar_proxy.py). Without
 # this the container starts fine and the radar 500s on the first tile.
-Pillow
-itsdangerous
+Pillow==12.3.0
+itsdangerous==2.2.0

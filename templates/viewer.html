@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.32.0 -->
+<!-- BUILT_FOR 1.33.1 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -121,11 +121,11 @@
        What is left here is the part that is unique to the tracker: the
        line the aeroplane is actually travelling along.
 
-       The TRACK is always drawn, because it is the route, not a readout.
        The FILL and the plane only move on a real position fix (invariant 9:
-       no fix, no figure). A leg that has ARRIVED fills to the end, because
-       closure said so and closure is authoritative — but it still prints no
-       percentage, so nothing is ever derived from the clock.
+       no fix, no figure). A leg that has ARRIVED shows 100% for thirty
+       minutes after touchdown and then the whole strip goes (owner's call,
+       report #8, 1.33.0) — closure said it is down, so 100 is a fact, not
+       a guess from the clock. See view._shown_progress.
 
        Deleted with the move, so nobody restores half of a design that no
        longer exists: .flight-num, .city-route, .route-ends, .route-end,
@@ -145,9 +145,8 @@
        is the same thing.
        It now rides with the aeroplane, so the number and the thing it
        describes are in the same place. Still only ever drawn from a real
-       position fix (invariant 9) — an arrived leg fills the bar but
-       prints no figure, because that fill comes from closure, not from a
-       measurement. */
+       position fix (invariant 9), with one exception the owner asked for:
+       a landed leg reads 100% for half an hour (1.33.0). */
     .route-pct {
       position: absolute; top: -1.15rem;
       transform: translateX(-50%);
@@ -648,6 +647,9 @@
       padding: 1rem 1.1rem calc(1rem + 46px + env(safe-area-inset-bottom, 0px));
       transform: translateY(101%);
       visibility: hidden;
+      /* Its own compositing layer from the start, so the first frame of
+         the slide is not also the frame Safari builds that layer in. */
+      will-change: transform;
       /* VISIBILITY IS PART OF THE TRANSITION, and that is what makes the
          slide happen at all (report #1, 1.32.0).
 
@@ -669,6 +671,11 @@
       transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1),
                   visibility 0s linear 300ms;
     }
+    /* STAGING (1.33.0): rendered, but still parked off the bottom of the
+       screen, with no transition — the frame Safari needs to have painted
+       before it will animate anything. Only ever on for two frames; see
+       openPanel(). */
+    .detail-panel.staging { visibility: visible; transition: none; }
     .detail-panel.open {
       transform: translateY(0);
       visibility: visible;
@@ -837,8 +844,13 @@
       border-radius: 18px 18px 0 0;
       box-shadow: 0 -8px 28px rgba(0,0,0,0.28);
       display: flex; flex-direction: column;
-      /* Above the tab pills, which stay reachable below it. */
-      padding-bottom: calc(46px + env(safe-area-inset-bottom, 0px));
+      /* NO BOTTOM PADDING HERE (1.33.0). It used to reserve a solid 46px
+         band (plus the home-indicator area) above the tab pill, painted in
+         the sheet's own colour — the white bar flights disappeared behind
+         as they scrolled. The room for the pill now lives INSIDE the
+         scrolling list instead (see .sheet-body), so rows slide on under
+         the pill and stay visible around it, and the last flight can still
+         scroll clear of it. */
     }
     /* The grab area. Generous, because it is the one control here and a
        12px bar is not a touch target. */
@@ -859,13 +871,32 @@
       flex: 1; min-height: 0;
       overflow-y: auto; -webkit-overflow-scrolling: touch;
       overscroll-behavior: contain;
-      padding: 0 0.9rem 1rem;
+      /* Vertical drags here are the LIST's, never the page's or the map's.
+         See the gesture lock in the script for the other half. */
+      touch-action: pan-y;
+      /* The bottom inset is scroll room, not a wall: the tab pill is about
+         60px tall and floats 0.35rem up from the home-indicator area. */
+      padding: 0 0.9rem calc(1rem + 64px + env(safe-area-inset-bottom, 0px));
     }
     /* The document itself no longer scrolls: everything is fixed furniture
        and the sheet owns the only scrollbar. This is also what makes the
        map unable to steal a scroll — there is no page scroll to steal, so
        .map-shield went with it. */
-    body.has-sheet { overflow: hidden; }
+    /* PINNED, not just overflow:hidden (1.33.0). iOS Safari does not
+       honour overflow:hidden on <body> for touch: a drag that runs off the
+       end of the flight list, or off its top edge onto the map, was
+       handed on to the PAGE, which then scrolled underneath everything —
+       and with the map fixed behind it, that read as the map sliding
+       about while the list was being scrolled. Fixing the body in place
+       is the standard way to tell iOS there is no page to scroll at all.
+       Every visible thing on this page is already position:fixed, so
+       nothing moves. */
+    body.has-sheet {
+      overflow: hidden;
+      position: fixed; inset: 0;
+      overscroll-behavior: none;
+    }
+    html:has(body.has-sheet) { overscroll-behavior: none; }
     .map-missing {
       position: absolute; top: 42%; left: 0; right: 0;
       text-align: center; color: var(--muted); font-size: 0.8125rem;
@@ -994,16 +1025,18 @@
            and measureEnds went with it. #}
       </div>
 
-      {# The fill position when there is no live fix: an arrived leg is at the
-         far end because closure said so, anything else sits at the start. The
-         PERCENTAGE is still only ever printed from a real fix. #}
-      {% set fill_pct = (current.progress_pct|round|int) if current.progress_pct is not none else (100 if current.phase_tag == 'Arrived' else 0) %}
+      {# ONE RULE (report #8, 1.33.0): the bar is drawn when progress_pct is
+         a number and hidden when it is not. view._shown_progress decides —
+         a live measurement while flying, 100 for half an hour after
+         touchdown, then nothing. It used to stay full on every arrived leg
+         forever, including flights from last week. #}
+      {% set fill_pct = (current.progress_pct|round|int) if current.progress_pct is not none else 0 %}
       <div class="route-strip">
         {#- An empty track at 0% is not information, it is a bar that looks
             broken. Show the strip only when there is a real position fix, or
             when the leg has arrived and the full bar means something. -#}
         <div class="route-line" id="progress-wrap-el"
-             style="{{ '' if (current.progress_pct is not none or current.phase_tag == 'Arrived') else 'display:none' }}">
+             style="{{ '' if current.progress_pct is not none else 'display:none' }}">
           <div class="route-track"><div class="route-fill" id="progress-fill-el" style="width: {{ fill_pct }}%"></div></div>
           {#- `clamp` keeps the label inside the card at 0% and 100%,
               where translateX(-50%) alone would hang it over the edge. -#}
@@ -1102,6 +1135,19 @@
              and it sat next to this row saying almost the same thing. This
              one answers the question a person actually has. #}
           <div class="aptblock-meta">
+            {#- THE AIRCRAFT, in the flight's own details (report #11, 1.33.0).
+                It used to be a grey line inside the Live ADS-B box, so it
+                vanished the moment the live feed did — on landing, at a
+                gate with no coverage, and on every past flight. It is a
+                fact about the FLIGHT and is stored on the flight's row (the
+                airline's tail first, else the one ADS-B reported), so it
+                shows from the moment it is first known and stays for as
+                long as the flight is kept. -#}
+            {%- set ac = current.aircraft -%}
+            <div class="detail-row" id="row-aircraft" style="{{ '' if (ac and (ac.registration or ac.display_type)) else 'display:none' }}">
+              <span class="k">Aircraft</span>
+              <span class="v" id="v-aircraft">{%- if ac %}{{ ac.registration or '' }}{% if ac.registration and ac.display_type %} &middot; {% endif %}{{ ac.display_type or '' }}{% endif %}</span>
+            </div>
             <div class="detail-row" id="row-arrsrc" style="{{ '' if current.arrival_source_text else 'display:none' }}">
               <span class="k">Arrival time from</span>
               <span class="v" id="v-arrsrc">{{ current.arrival_source_text or '' }}</span>
@@ -1168,11 +1214,7 @@
             {% if live.icao24 %}
             <div class="live-meta">ICAO {{ live.icao24 }}{% if live.callsign %} · {{ live.callsign }}{% endif %}</div>
             {% endif %}
-            {% if current.aircraft and (current.aircraft.registration or current.aircraft.display_type) %}
-            <div class="aircraft-line">
-              {{ current.aircraft.registration or '' }}{% if current.aircraft.registration and current.aircraft.display_type %} · {% endif %}{{ current.aircraft.display_type or '' }}
-            </div>
-            {% endif %}
+            {#- The tail number moved to the flight details (1.33.0). -#}
             {% else %}
             No live ADS-B position right now
             {% endif %}
@@ -1450,13 +1492,54 @@
       if (!panel) return;
       var sheet = document.getElementById('sheet');
 
+      // THE SLIDE, TAKE TWO (1.33.0). 1.32.0 tried to fix the "teleport"
+      // with CSS alone — flip visibility instantly on the way in, delayed
+      // on the way out — and on the owner's iPhone the panel still jumped.
+      // Two things defeated it:
+      //
+      //   1. Safari only animates FROM a state it has actually painted. A
+      //      panel switched from hidden to visible and to its open
+      //      position in the same frame has no painted "closed" frame to
+      //      start from, whatever the transition rules say.
+      //   2. focus() on the close button in that same frame makes Safari
+      //      settle layout immediately — which lands the panel at its end
+      //      position before any animation can run.
+      //
+      // So it is done in three explicit steps: make the panel visible
+      // where it already sits (off the bottom of the screen), wait for the
+      // browser to PAINT that — two animation frames, the reliable way to
+      // be sure one paint has happened — then add `.open` and let the
+      // transform animate. Focus moves to the close button only once the
+      // slide has finished.
+      var openTimer = null;
       function openPanel() {
-        panel.classList.add('open');
+        if (openTimer) { clearTimeout(openTimer); openTimer = null; }
         panel.scrollTop = 0;
-        if (closeBtn) closeBtn.focus({ preventScroll: true });
+        if (panel.classList.contains('open')) return;
+        panel.classList.add('staging');            // visible, still off-screen
+        void panel.offsetHeight;                   // commit that style now
+        window.requestAnimationFrame(function () {
+          window.requestAnimationFrame(function () {
+            panel.classList.add('open');
+            panel.classList.remove('staging');
+            openTimer = setTimeout(function () {
+              openTimer = null;
+              if (closeBtn && panel.classList.contains('open')) {
+                try { closeBtn.focus({ preventScroll: true }); } catch (e) {}
+              }
+            }, 320);
+          });
+        });
       }
       function closePanel() {
+        if (openTimer) { clearTimeout(openTimer); openTimer = null; }
+        panel.classList.remove('staging');
         panel.classList.remove('open');
+        // Hand focus back to the list so it is not left on a button that
+        // is sliding off the screen.
+        if (document.activeElement && panel.contains(document.activeElement)) {
+          try { document.activeElement.blur(); } catch (e) {}
+        }
       }
       // AUTO-OPEN WHEN A LEG IS AIRBORNE, on load, once.
       //
@@ -1469,7 +1552,7 @@
       // a feature, it is a fight. It is the SAME panel a tap opens, not a
       // variant, so there is only ever one thing to maintain.
       if (document.body.getAttribute('data-live-leg') === '1') {
-        window.requestAnimationFrame(function() { panel.classList.add('open'); });
+        openPanel();
       }
 
       window._ptOpenDetail = openPanel;
@@ -1843,6 +1926,51 @@
       const map = L.map('flight-map', { zoomControl: false });
       mapEl._leafletInstance = map;
 
+      // ONE GESTURE, ONE OWNER (1.33.0). Whatever the finger touched FIRST
+      // keeps the whole gesture. A drag that starts on the flight list (or
+      // the detail panel, or the tab pill) scrolls the list and only the
+      // list, even when the finger wanders up over the map; the map's own
+      // drag and pinch are switched off for exactly as long as that finger
+      // is down, then switched straight back on. A drag that starts on the
+      // map is the map's, as it always was.
+      //
+      // Listened for at the DOCUMENT in the capture phase, so the map is
+      // locked before any of its own handlers could see the touch.
+      (function () {
+        var OWNERS = '#sheet, #detail-panel, .tabbar';
+        var locked = false;
+        function lock() {
+          if (locked) return;
+          locked = true;
+          try { map.dragging.disable(); map.touchZoom.disable(); } catch (e) {}
+        }
+        function unlock() {
+          if (!locked) return;
+          locked = false;
+          try { map.dragging.enable(); map.touchZoom.enable(); } catch (e) {}
+        }
+        function startedOnList(t) { return !!(t && t.closest && t.closest(OWNERS)); }
+        document.addEventListener('touchstart', function (e) {
+          if (startedOnList(e.target)) lock();
+        }, { passive: true, capture: true });
+        function maybeUnlock(e) {
+          if (!e.touches || e.touches.length === 0) unlock();
+        }
+        document.addEventListener('touchend', maybeUnlock, { passive: true, capture: true });
+        document.addEventListener('touchcancel', maybeUnlock, { passive: true, capture: true });
+        // Pointer events too, for browsers that drive Leaflet that way.
+        document.addEventListener('pointerdown', function (e) {
+          if (e.pointerType !== 'mouse' && startedOnList(e.target)) lock();
+        }, { passive: true, capture: true });
+        document.addEventListener('pointerup', function (e) {
+          if (e.pointerType !== 'mouse') setTimeout(function () {
+            // Only once no finger is left down; touchend covers the
+            // multi-finger case on touch browsers.
+            if (!('ontouchstart' in window)) unlock();
+          }, 0);
+        }, { passive: true, capture: true });
+      })();
+
       // The map is sized by a FIXED, full-viewport parent, and this script
       // runs while the page is still laying out. Mobile Safari routinely
       // reports that box as 0x0 at this moment, so Leaflet caches zero
@@ -2161,17 +2289,24 @@
       // The route strip. Fill and plane move only on a real position fix;
       // with none, an arrived leg parks at the far end and everything else
       // at the start, and no percentage is printed either way.
+      function escHtml(t) {
+        return String(t == null ? '' : t).replace(/[&<>"']/g, function(c) {
+          return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+        });
+      }
+
       function applyProgress(pct, distanceNm, ete, phaseTag) {
         const fill = document.getElementById('progress-fill-el');
         const plane = document.getElementById('route-plane-el');
         const stats = document.getElementById('progress-label-el');
         const known = (pct != null);
-        const at = known ? Math.round(pct) : (phaseTag === 'Arrived' ? 100 : 0);
-        // Mirrors the server-side condition above. Without this the strip
-        // would render hidden and then be un-hidden, empty, by the first
-        // poll -- which is how it looked broken before 1.4.0.
+        const at = known ? Math.round(pct) : 0;
+        // Mirrors the server-side condition above: ONE rule, the bar shows
+        // when there is a number (1.33.0). The server holds a landed leg
+        // at 100 for half an hour and then sends nothing, so the bar
+        // leaves on its own at the next poll — nothing here decides that.
         const wrap = document.getElementById('progress-wrap-el');
-        if (wrap) wrap.style.display = (known || phaseTag === 'Arrived') ? '' : 'none';
+        if (wrap) wrap.style.display = known ? '' : 'none';
         if (fill) fill.style.width = at + '%';
         if (plane) {
           plane.style.left = at + '%';
@@ -2260,6 +2395,10 @@
             // body as though it were live.
             var stale = r.headers.get('X-MyPilot-Stale') === '1';
             if (r.status === 503) throw new Error('offline');
+            // Signed out — a revoked or expired share code, or a password
+            // change on another device. Go to the sign-in page rather than
+            // sit on a map that will never update again. (1.33.0)
+            if (r.status === 401) { window.location.href = '/login'; throw new Error('signed out'); }
             return r.json().then(function(d) { d.__stale = stale; return d; });
           })
           .then(function(data) {
@@ -2299,11 +2438,10 @@
                 if (data.live.track != null) html += '<div><span class="live-val">' + Math.trunc(data.live.track) + '°</span> <span class="live-unit">trk</span></div>';
                 if (data.live.on_ground) html += '<div><span class="live-val">On ground</span></div>';
                 html += '</div>';
-                if (data.live.icao24) html += '<div class="live-meta">ICAO ' + data.live.icao24 + (data.live.callsign ? ' · ' + data.live.callsign : '') + '</div>';
-                if (data.aircraft && (data.aircraft.registration || data.aircraft.display_type)) {
-                  html += '<div class="aircraft-line">' + (data.aircraft.registration || '') +
-                    ((data.aircraft.registration && data.aircraft.display_type) ? ' · ' : '') + (data.aircraft.display_type || '') + '</div>';
-                }
+                // ESCAPED (1.33.0). These come from a public ADS-B feed and
+                // were pasted into the page as markup. The tail number that
+                // used to follow them here moved to the flight details.
+                if (data.live.icao24) html += '<div class="live-meta">ICAO ' + escHtml(data.live.icao24) + (data.live.callsign ? ' · ' + escHtml(data.live.callsign) : '') + '</div>';
                 liveBoxInner.innerHTML = html;
               } else {
                 liveBoxEl.classList.add('muted-live');
@@ -2505,6 +2643,19 @@
         setShown('v-arr-gate', !!g.dest_gate);
         setText('v-arr-gate-text', g.dest_gate);
 
+        // The aircraft (report #11, 1.33.0). Only ever SHOWN or UPDATED,
+        // never blanked by a poll that happens to lack it: the server
+        // reads it from the stored row, so an empty value here means
+        // "not known yet", not "gone".
+        var ac = data.aircraft;
+        if (ac && (ac.registration || ac.display_type)) {
+          setText('v-aircraft', [ac.registration, ac.display_type].filter(Boolean).join(' \u00b7 '));
+          setShown('row-aircraft', true);
+        } else if (data.__legSwitch) {
+          setText('v-aircraft', '');
+          setShown('row-aircraft', false);
+        }
+
         setShown('row-diverted', !!data.diversion);
         if (data.diversion) setText('v-diverted', data.diversion.diverted_to);
 
@@ -2647,6 +2798,11 @@
           arr_line: cur.arr_line || null,
           gates: cur.gates || null,
           diversion: cur.diversion || null,
+          // The tapped leg's own aircraft, and permission to CLEAR the row
+          // when it has none — otherwise the previous flight's tail number
+          // would stay on screen under a different flight.
+          aircraft: cur.aircraft || null,
+          __legSwitch: true,
           // Carried through so tapping a PAST flight shows its stored
           // closeout and airline times rather than inheriting the rows
           // left over from whichever leg was on screen before.

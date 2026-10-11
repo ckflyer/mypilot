@@ -18,6 +18,9 @@ services:
       # - PT_DEBUG_MAX_EVENTS=20000         # decision log ring size
       # - PT_SECRET_KEY=                    # pins login sessions across a DB rebuild. Generate ONCE:
       #                                     #   python3 -c "import secrets; print(secrets.token_hex(32))"
+      # - PT_TRUST_PROXY_HEADERS=auto       # who the login rate-limit believes. auto (default): trust
+      #                                     #   Cloudflare's visitor address only when the connection comes
+      #                                     #   from the local network (the tunnel). 0 = never, 1 = always.
 
       # ADS-B feeds. Normally leave these alone and manage feeds at /admin —
       # setting either one PINS the list and the admin page can't change it.

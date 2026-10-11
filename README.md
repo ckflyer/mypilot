@@ -80,6 +80,13 @@ ones with nothing to decide.** A leg in both the paste and your roster is
 frozen and gets folded. A leg the paste has stopped mentioning never
 does. (1.30.1 folded both and hid the reassignment case; 1.30.2 fixed it.)
 
+**Flown flights were deleted after 30 days, not a year (fixed 1.33.0).**
+Retention was raised to 365 days in 1.0.0, but the closure code kept
+stamping every finished flight "delete after 30 days", and the cleanup
+obeyed the stamp. Retention is now decided in one place, from the
+flight's date. Anything that vanished before 1.33.0 can only come back from
+a backup (see `dev/BACKUP.md`).
+
 **Time arithmetic goes through UTC, never wall clocks.** Subtracting a
 departure time from an arrival time is wrong the moment a leg crosses a
 time zone, which is most of them.
@@ -114,7 +121,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 Then open `http://localhost:8000/` — first visit redirects to `/setup` to
 create your pilot account (username, password, optional email). After that,
 `/login` is where everyone comes in: pilots use username+password, viewers
-(family, whoever you share the code with) use the 5-digit tracking code
+(family, whoever you share the code with) use the tracking code
 shown on `/admin`.
 
 ## DEPLOY ON TRUENAS WITH DOCKGE
@@ -125,7 +132,7 @@ shown on `/admin`.
 4. Start the stack. First boot will build the image and expose port `8000`.
 5. Visit `http://<truenas-ip>:8000/` — you'll land on `/setup` to create your pilot account.
 6. Nothing to configure for live tracking — Airplanes.live needs no API key or account.
-7. On `/admin`, grab the 5-digit share code and send it to whoever should be able to view your flights.
+7. On `/flights`, grab a share code and send it to whoever should be able to view your flights.
 8. Everything in `./data` persists across container restarts/rebuilds since it's a bind-mounted volume.
 
 Login is real now (password-protected pilot account, code-gated viewer
@@ -160,7 +167,8 @@ so `bash update.sh` is the safe way to invoke it either way.)
 - **Pilots** log in with a username/password created during first-run setup
   at `/setup`. Only a pilot can edit the schedule (`/admin`) or settings
   (`/settings`).
-- **Viewers** don't need an account — just the 5-digit code shown at the top
+- **Viewers** don't need an account — just a share code (8 digits for any
+  code made from 1.33.0 on; older 5-digit codes keep working) shown at the top
   of `/admin`, entered on the "Viewer access" side of `/login`. Any number of
   people can use the same code at once, and it stays valid indefinitely once
   someone's logged in with it.
@@ -172,9 +180,52 @@ so `bash update.sh` is the safe way to invoke it either way.)
   clipboard) to send the link + code.
 - The data model is user-scoped throughout (separate schedules, separate
   separate everything per pilot account) as groundwork
-  for supporting more than one pilot on the same install later. Right now
-  there's no public signup — accounts are created only via the one-time
-  `/setup` bootstrap.
+  for supporting more than one pilot on the same install. **Sign-up is
+  open:** anyone who can reach the site can create a pilot account at
+  `/register` (the owner's decision, 1.33.0). A new account sees only its
+  own schedule and is never an admin. Settings → **Invite a pilot** (for
+  everyone, family included) sends that page through the phone's share
+  sheet.
+- **Changing your password signs out every other device** (1.33.0). The
+  one you changed it on stays signed in. Resetting it with the recovery
+  code does the same.
+
+## SECURITY
+
+The page says where someone is, so it is treated as sensitive. What is in
+place as of 1.33.0, in plain terms:
+
+- **Passwords** are stored as a salted, slow hash (PBKDF2, 260,000 rounds),
+  never as text. A wrong username takes as long to reject as a wrong
+  password, so timing does not reveal which accounts exist.
+- **Share codes**: new ones are 8 digits (a hundred million possibilities).
+  Old 5-digit codes still work through the same check; replace them on
+  `/flights` whenever convenient. Each code can be named, given an expiry
+  date, or deleted, which cuts off only the people using it.
+- **Guessing is limited twice**: per visitor, and across everyone together.
+  Forty wrong share codes in an hour, from anywhere, pauses code sign-in
+  for an hour. People already signed in are not affected.
+- **Who is a "visitor"**: behind Cloudflare, the app believes Cloudflare's
+  note of the real address only when the connection comes from your own
+  network (the tunnel). Someone connecting directly cannot pretend to be a
+  thousand different visitors. `PT_TRUST_PROXY_HEADERS` in
+  `docker-compose.yml` overrides this; the default is right for Cloudflare.
+- **Cookies**: the login cookie cannot be read by page scripts, is never
+  sent to other sites, and — when you are on the https Cloudflare address —
+  is marked Secure so it is never sent unencrypted. On the LAN address
+  (`http://<nas-ip>:8000`) it works as before.
+- **Browser protections** on every page: no other site can frame the app,
+  files are only treated as what they are, links out do not reveal which
+  page they came from, and the browser is told the app never needs the
+  camera, microphone or the viewer's location.
+- **Signed out means signed out**: a password change ends every other
+  session; a deleted or expired share code ends its viewers' sessions on
+  their next refresh, and the tracker sends them to the sign-in page. The
+  sign-in page also deletes the offline copy of the last person's flights.
+- **Radar tiles** are only served to signed-in pages.
+- **The AeroAPI key** is stored in the database in plain text, because the
+  app has to send it to FlightAware. Protect `data/` like a password file;
+  `dev/BACKUP.md` says the same about backups.
 
 ## SCHEDULE FORMAT
 
@@ -894,6 +945,6 @@ the cap, when the figure was last pulled, and which source it came from.
   enough ADS-B ground coverage to see it — busier fields (DFW) are reliable,
   smaller regional stations are a toss-up. When there's no coverage for a
   phase, it's skipped silently rather than guessed.
-- No payments, public signup, or email/SMTP integration yet — those are
+- No payments or email/SMTP integration yet — those are
   intentionally deferred, not missing by accident.
 

@@ -1,4 +1,4 @@
-{# BUILT_FOR 1.32.0 #}
+{# BUILT_FOR 1.33.1 #}
 {#- The ADMIN page. Everything that operates the INSTALL, on one screen.
 
     NAMING, because it caused real confusion. /flights is one pilot's
@@ -178,6 +178,12 @@
     .kv .v.bad { color: var(--bad); font-weight: 600; }
     .note { color: var(--muted); font-size: 0.76rem; line-height: 1.5; margin: 0.5rem 0; }
     .alert { color: var(--bad); font-size: 0.8rem; line-height: 1.5; margin: 0.5rem 0; }
+    /* The "5 new" count in the inbox header (report #9, 1.33.0). It printed
+       as raw markup — `<span class="alert">5 new</span>` — because `| safe`
+       bound only to the ELSE half of the conditional around it, so the
+       half that actually had markup was escaped. Jinja filters bind tighter
+       than `if … else`; the parentheses now say which half is meant. */
+    .grow-alert { color: var(--bad); font-weight: 700; }
     .pill { font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.15rem 0.45rem; border-radius: 999px; white-space: nowrap; }
     .pill.good { background: rgba(34,197,94,0.16); color: var(--good); }
     .pill.warn { background: rgba(245,158,11,0.18); color: var(--warn); }
@@ -296,7 +302,7 @@
   <div class="glist">
     <details class="grow" {% if inbox_counts.new %}open{% endif %}>
       {{ rowhead('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16v11H13l-4.5 3.5v-3.5H4z"/><path d="M12 8.4v3.4"/><circle cx="12" cy="14.1" r="0.6" fill="currentColor" stroke="none"/></svg>'|safe, 'Feedback & bug reports',
-         ('<span class="alert">' ~ inbox_counts.new ~ ' new</span>') if inbox_counts.new else (inbox_counts.total ~ ' total' if inbox_counts.total else 'None yet') | safe) }}
+         (('<span class="grow-alert">' ~ inbox_counts.new ~ ' new</span>') | safe) if inbox_counts.new else (inbox_counts.total ~ ' total' if inbox_counts.total else 'None yet')) }}
       <div class="grow-body">
         {% if not inbox %}
         <p class="hint">Nothing reported yet. Anyone signed in can send one from
@@ -468,7 +474,8 @@
           </table>
         </div>
         <p class="hint">
-          To add someone, send them this server's <a href="/register">/register</a> page.
+          To add someone, send them this server's <a href="/register">/register</a> page
+          (Settings &rarr; <strong>Invite a pilot</strong> shares it from any phone).
           They create their own account, then you promote them here. Only the first
           account ever created is an admin automatically. <strong>The last remaining admin
           cannot be removed or deleted</strong> — an install with flight data and nobody
@@ -729,7 +736,8 @@
       if (row.open) { load(); }
       row.addEventListener('toggle', function () { if (row.open) { load(); } });
     })();
-  </script>
+  
+</script>
   {% include "partials/tabbar.html" %}
 {% include "partials/sw_register.html" %}
 </body>
