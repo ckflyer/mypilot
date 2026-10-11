@@ -228,9 +228,71 @@ and say so before editing — that has already cost a working feature once.
    file before guessing. VERSION also keys the service worker cache, so
    skipping the bump means phones keep serving the old build.
 2. Add a `## VERSION HISTORY` entry at the top of it.
-3. Update `## STATE
+3. Update `## STATE` and `## OPEN`.
+4. Record any bug you hit and how it was diagnosed.
+5. Run every suite with `bash dev/run_tests.sh`. Package only if all pass.
+6. Never ship `data/*.db` or `data/secret_key.txt`. Check the packaged
+   zip, not just the working tree — a test run recreates both.
 
-**v1.33.2.** Renamed to MyPilot in 1.0.0. Deployed on TrueNAS via Dockge,
+**Owner context:** no programming background. Explain reasoning in prose in
+chat, not jargon. He is a line pilot and is the authority on operational
+questions (what "delayed" means, when a flight is over) — ask him rather
+than inferring. He has caught two real bugs by inspection; take his hunches
+seriously.
+
+**Deploy workflow:** he drops extracted files into a GitHub repo, runs
+`git pull` on TrueNAS, then `update.sh` via Dockge.
+
+**END EVERY RELEASE WITH ALL THREE COMMANDS** (owner's standing request,
+1.33.2), filled in with the version. Also kept as the claude.ai project
+doc `claude/deploy-commands.md`.
+
+- Mac (Terminal): `cd /path/to/repo && git add . && git commit -m "X.Y.Z" && git push`
+  — he authenticates with a GitHub personal access token saved in the
+  keychain; the account password is refused.
+- Windows: `cd "C:\path\to\repo" && git add . && git commit -m "X.Y.Z" && git push`,
+  or double-click `_push.bat` (Windows only — it does not run on a Mac).
+- TrueNAS: `cd /mnt/pool/apps/dockge/stacks/my-flight-tracker && bash update.sh`
+  (`sudo` if permission denied). Success: `OK - repo and container are both X.Y.Z`.
+
+Remind him to copy what is INSIDE the extracted `mypilot-main`, not the
+folder itself.
+
+**Exposure (recorded 1.33.0):** reached from outside through a
+**Cloudflare tunnel**, which is what makes the trusted-proxy rule in
+`ratelimit.get_client_ip` correct by default. Sign-up is deliberately
+OPEN (owner's decision, 1.33.0).
+
+### WHERE THINGS LIVE (1.31.0)
+
+```
+<root>/     DEPLOYED. app/ templates/ static/ data/, Dockerfile,
+            docker-compose.yml, requirements.txt, update.sh, README.md
+dev/        NOT DEPLOYED. Excluded from the Docker image by
+            .dockerignore, but tracked in git.
+  AI-README.md   this file
+  tests/         every suite
+  tools/         one-off checkers, the icon generator
+  run_tests.sh   runs everything
+  BACKUP.md
+```
+
+**The test is whether a file is needed to serve a request.** If it is
+not, it belongs under `dev/`. Before 1.31.0 the suites sat at the project
+root and `COPY . .` baked about 350KB of them into every image.
+
+Tests resolve paths from `PROJECT_ROOT`, defined at the top of each file
+as two directories up. A new test file must define it the same way, or it
+will look for `templates/` inside `dev/tests/` and fail confusingly.
+
+`README.md` is for somebody RUNNING the app. This file is for somebody
+BUILDING it. Keep the first readable by a non-programmer; keep this one
+exhaustive. Where they contradict each other, this one is right and the
+other gets corrected.
+
+## STATE
+
+**v1.33.3.** Renamed to MyPilot in 1.0.0. Deployed on TrueNAS via Dockge,
 reached from outside through a Cloudflare tunnel. Multi-user, sign-up
 open: the owner plus several FOs, who fly the same legs — hence shared
 flight rows (v5.1, retained).
@@ -1305,6 +1367,48 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.33.3 — the grey band, properly; the slide, played; a bigger map
+
+**The grey band survived 1.33.2** (owner, confirmed on 1.33.2 on his
+installed iPhone): pill and sheet still lifted ~65pt off the bottom, page
+background showing beneath. 1.33.0 pinned the body; 1.33.2 removed the pin
+but clamped html/body to 100% and set overscroll-behavior on the root.
+Both broke it; 1.32 and /flights, which had none of those rules, were
+right on the same phone. REVERTED to the exact 1.32 rule
+(`body.has-sheet { overflow: hidden; }`), and a test now forbids any
+other html/body rule for this page. Exactly which of the root rules iOS 26
+reacts to was not isolated — no WebKit here to test with — and it does
+not need to be: the cure is not having them.
+
+The page is held still from SCRIPT instead: a non-passive `touchmove`
+listener cancels drags that are not on the list, the panel, the map or a
+form control. The gesture lock (which the owner confirmed works) is
+unchanged.
+
+**The slide still jumped on his iPhone** after two CSS-transition fixes
+(1.32.0 visibility timing, 1.33.0 a staged first frame). Now played with
+`element.animate()` with both keyframes stated, so no painted start frame
+and no style-change inference is involved. CSS keeps only the end state.
+Reduce Motion no longer cancels it: iOS's own sheets still slide with
+Reduce Motion on, and the owner wants the slide. Chromium, sampled per
+frame: open 452 → 0 px and close 0 → 452 px, each over ~300 ms. **Still
+unverified on an iPhone** — it is the third attempt, so if it fails again
+the next step is a screen recording from the owner, not a fourth guess.
+
+**Map bigger**: `--sheet-peek` 52vh → 48vh (owner: "bring it down about
+10%"). Part of what he saw was the band lifting the sheet ~7%; with both,
+the list's top edge moves from ~41% to ~52% of the screen.
+
+**THE BRIEF ITSELF WAS DAMAGED IN 1.33.0, and repaired here.** The
+script that rewrote STATE searched for the text `## STATE` and found it
+first inside protocol step 3 ("Update `## STATE` and `## OPEN`"), so it
+replaced from there to the real STATE section — deleting session-end
+steps 3–6, Owner context, Deploy workflow and WHERE THINGS LIVE. Nothing
+in the app changed; the brief silently lost its own instructions for two
+releases. Restored from the 1.32.0 text. Lesson: when editing this file by
+script, anchor on the heading WITH its line start (`\n## STATE\n`), and
+diff the result before packaging.
 
 ### 1.33.2 — the grey band under the tracker, and Share beside log out
 

@@ -778,7 +778,7 @@ def test_flight_sheet():
     # scrollbar from CSS: if the script then dies, there is no sheet
     # scrolling AND no page scrolling, and the schedule is unreachable.
     check("the page's scrollbar is not killed by CSS alone",
-          "body.has-sheet {\n      overflow: hidden;" in html
+          "body.has-sheet { overflow: hidden; }" in html
           and "\n    body { overflow: hidden" not in html)
     check("...the script opts in only once it is alive",
           "document.body.classList.add('has-sheet');" in html)
@@ -963,9 +963,11 @@ def test_detail_panel_replaces_the_hero_card():
           "overflow-y: auto" in css_block, css_block)
     # transform, not height. Every height-driven animation in this file has
     # cost a bug, twice over the same one.
+    # 1.33.3: the slide is PLAYED (element.animate), not a CSS transition
+    # — two CSS-transition fixes in a row still jumped on the iPhone.
     check("it slides on a transform, not a height",
           "transform: translateY(101%)" in css_block
-          and "transition: transform" in css_block, css_block)
+          and "panel.animate([{ transform: from }, { transform: to }]" in html, css_block)
     check("...and is hidden from tab order when shut",
           "visibility: hidden" in css_block, css_block)
     # UPDATED 1.32.0. Both of these pinned exact one-line rules, and the
@@ -989,11 +991,17 @@ def test_detail_panel_replaces_the_hero_card():
     check("...becoming visible only when open",
           "transform: translateY(0)" in open_block
           and "visibility: visible" in open_block, open_block)
-    check("...and is rendered BEFORE the slide starts, or Safari will not "
-          "animate it at all",
-          "visibility 0s linear 0s" in open_block, open_block)
-    check("...while closing keeps it rendered until the slide finishes",
-          "visibility 0s linear 300ms" in css_block, css_block)
+    # REPLACED 1.33.3. These asserted the 1.32.0 visibility-timing pair,
+    # which still teleported on the owner's iPhone. The motion is now an
+    # explicit animation with both ends stated, so there is no CSS
+    # transition left to time — and there must not be one, or the two
+    # would fight.
+    check("...with no CSS transition left to fight the animation",
+          "transition" not in css_block.split("*/")[-1], css_block)
+    check("...the animation states BOTH ends, so no painted frame is needed",
+          "var OFF = 'translateY(101%)', ON = 'translateY(0px)';" in html)
+    check("...and closing keeps it open until the slide-out has finished",
+          "panel.classList.remove('open');" in html.split("function closePanel()", 1)[1][:900])
     # Motion off means motion off — but visibility must still flip, or the
     # panel becomes permanently unreachable.
     # There is more than one reduced-motion block in this file, so pick
@@ -1001,9 +1009,10 @@ def test_detail_panel_replaces_the_hero_card():
     reduced = [b.split("}", 1)[0] for b in
                html.split("@media (prefers-reduced-motion: reduce) {")[1:]
                if ".detail-panel" in b.split("}", 1)[0]]
-    check("reduced motion skips the slide",
-          bool(reduced) and "transition: visibility 0s" in reduced[0],
-          reduced[0] if reduced else "no block mentions .detail-panel")
+    # 1.33.3: Reduce Motion no longer cancels the panel slide — iOS's own
+    # sheets still slide with it on, and the owner wants the slide.
+    check("reduced motion does not cancel the panel slide",
+          not reduced, reduced[0] if reduced else "")
 
     # THE ENGINE IS GONE, not merely unused.
     code = re.sub(r"^\s*//.*$", "", html, flags=re.M)
@@ -1645,18 +1654,24 @@ def test_map_cannot_steal_the_scroll():
     code = re.sub(r"\{#.*?#\}", "", code, flags=re.S)
 
     check("the shield is gone", "map-shield" not in code)
-    check("the document no longer scrolls", "body.has-sheet {\n      overflow: hidden;" in html)
+    check("the document no longer scrolls", "body.has-sheet { overflow: hidden; }" in html)
     # 1.33.0: overflow:hidden alone does not stop iOS scrolling the page
     # under a drag that leaves the list; the body is pinned as well.
     # 1.33.0 pinned the body (position:fixed) and it moved the tab pill
     # and the sheet up on an installed iPhone. 1.33.2: the body is clamped
     # to the screen with the extra padding removed, so there is nothing to
     # scroll — and it must never be pinned again.
+    # 1.33.3: BOTH CSS attempts (pin in 1.33.0, clamp in 1.33.2) lifted
+    # the pill and left a grey band on the owner's installed iPhone. The
+    # frame is the 1.32 one-liner again and nothing else may touch html or
+    # body here; the page is held still from script.
     block = html.split("body.has-sheet {", 1)[1].split("}", 1)[0]
-    check("...by having nothing to scroll: clamped to the screen",
-          "height: 100%; min-height: 0;" in block and "padding-bottom: 0 !important" in block)
-    check("...and NOT by pinning the body, which broke the iPhone layout",
-          "position: fixed" not in block)
+    check("...with the 1.32 frame and nothing more",
+          block.strip() == "overflow: hidden;", block)
+    check("...no rule here targets the root element",
+          "html:has(body.has-sheet)" not in code)
+    check("...the page is held still from script instead",
+          "document.addEventListener('touchmove'" in html and "passive: false" in html)
     check("...and the only scroller is the sheet's own body",
           ".sheet-body {" in html and "overflow-y: auto" in html)
     # The strip of map ABOVE the card is still pannable — that was true of

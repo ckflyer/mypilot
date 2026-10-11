@@ -325,10 +325,11 @@ def test_admin_inbox_and_share(client_pilot):
 def test_tracker_ui():
     print("\nTracker: slide, gestures, the bar above the tabs")
     v = read("templates/viewer.html")
-    check("the panel is staged before it slides", ".detail-panel.staging" in v
-          and "panel.classList.add('staging')" in v)
-    check("...across two frames", v.count("window.requestAnimationFrame(function () {") >= 2)
-    check("...and focus waits for the slide to finish", "}, 320);" in v)
+    check("the panel slide is PLAYED, not transitioned (1.33.3)",
+          "panel.animate([{ transform: from }, { transform: to }]" in v)
+    check("...and focus waits for the slide to finish",
+          "}, SLIDE_MS + 20);" in v)
+    check("the sheet sits lower: 48vh (owner, 1.33.3)", "--sheet-peek: 48vh" in v)
     check("a drag that starts on the list locks the map",
           "map.dragging.disable()" in v and "OWNERS = '#sheet, #detail-panel, .tabbar'" in v)
     sheet = v.split("    .sheet {", 1)[1].split("}", 1)[0]

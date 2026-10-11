@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.33.2 -->
+<!-- BUILT_FOR 1.33.3 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -650,43 +650,22 @@
       /* Its own compositing layer from the start, so the first frame of
          the slide is not also the frame Safari builds that layer in. */
       will-change: transform;
-      /* VISIBILITY IS PART OF THE TRANSITION, and that is what makes the
-         slide happen at all (report #1, 1.32.0).
-
-         The panel sits at `visibility: hidden` while closed, so it does
-         not sit in the tab order or take taps through the map. Adding
-         `.open` flipped visibility and transform in the same frame — and
-         Safari will not interpolate a transform on an element that was
-         not being rendered a moment ago. It has nothing to animate FROM,
-         so it jumps straight to the end state. That is the "teleport".
-         Chrome is more forgiving, which is why it survived testing.
-
-         The fix is the standard pairing. On the way IN, visibility
-         switches at 0s with no delay, so the element is rendered before
-         the transform starts and there is something to animate from. On
-         the way OUT, visibility is DELAYED by the full duration, so the
-         panel stays rendered while it slides down and only disappears
-         once it has gone. Removing the delay would make closing teleport
-         instead. */
-      transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1),
-                  visibility 0s linear 300ms;
+      /* NO CSS TRANSITION (1.33.3). Two releases of CSS-transition
+         fixes (1.32.0 visibility timing, 1.33.0 a staged first frame)
+         slid in Chromium and still jumped on the owner's iPhone. The
+         slide is now played explicitly with element.animate() — see
+         openPanel() — which states BOTH ends of the motion itself and so
+         does not depend on Safari having painted a starting frame. The
+         class only says where the panel ends up. */
     }
-    /* STAGING (1.33.0): rendered, but still parked off the bottom of the
-       screen, with no transition — the frame Safari needs to have painted
-       before it will animate anything. Only ever on for two frames; see
-       openPanel(). */
-    .detail-panel.staging { visibility: visible; transition: none; }
     .detail-panel.open {
       transform: translateY(0);
       visibility: visible;
-      transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1),
-                  visibility 0s linear 0s;
     }
-    /* Motion off means motion off — but visibility must still flip, or the
-       panel would become permanently unreachable. */
-    @media (prefers-reduced-motion: reduce) {
-      .detail-panel, .detail-panel.open { transition: visibility 0s; }
-    }
+    /* Reduce Motion no longer cancels the slide (1.33.3). iOS's own
+       sheets still slide up with Reduce Motion on — the setting removes
+       zooms and parallax, not a panel arriving from the edge — and the
+       owner wants the slide. */
     /* SLIDE-OPEN PANEL.
        All the spacing (gap, rule, padding) lives on the inner wrapper, and
        the outer element carries nothing but overflow:hidden and a height the
@@ -834,7 +813,9 @@
        what the owner asked for and also about three rows. */
     /* Raised from 38vh (1.15.0): at that height the list was short enough
        that reaching for it often landed on the map instead. */
-    :root { --sheet-peek: 52vh; }
+    /* 48vh (was 52), owner's call 1.33.3: the map felt too small. The
+       detail panel takes the same height, so the two still line up. */
+    :root { --sheet-peek: 48vh; }
     .sheet {
       position: fixed;
       left: 0; right: 0; bottom: 0;
@@ -882,32 +863,19 @@
        and the sheet owns the only scrollbar. This is also what makes the
        map unable to steal a scroll — there is no page scroll to steal, so
        .map-shield went with it. */
-    /* NOTHING TO SCROLL, rather than pinned (1.33.2).
-
-       1.33.0 pinned the body with `position: fixed; inset: 0` to stop iOS
-       scrolling the page under a drag that ran off the flight list. On the
-       owner's iPhone (installed to the home screen) that moved where
-       "the bottom of the screen" is for every fixed element: the tab pill
-       rode up, the sheet stopped short, and a grey band of page background
-       showed beneath both. Reverted.
-
-       The actual reason the page could scroll at all: the body was TALLER
-       than the screen — min-height 100vh plus the top padding plus the
-       72px bottom padding app.css gives every page for the tab pill. iOS
-       will scroll anything taller than the screen, overflow:hidden or not.
-       On this page every visible thing is position:fixed, so the body's
-       own height is irrelevant; it is clamped to exactly the screen and
-       the extra padding removed, and there is simply nothing left to
-       scroll. The gesture lock in the script stays as the second half. */
-    html:has(body.has-sheet) {
-      height: 100%; overflow: hidden; overscroll-behavior: none;
-    }
-    body.has-sheet {
-      overflow: hidden;
-      height: 100%; min-height: 0;
-      padding-bottom: 0 !important;
-      overscroll-behavior: none;
-    }
+    /* BACK TO EXACTLY THE 1.32 RULE (1.33.3). Two attempts to stop iOS
+       scrolling the page underneath a list drag — 1.33.0 pinned the body
+       (position:fixed), 1.33.2 clamped html and body to 100% height and
+       set overscroll-behavior on the root — BOTH left a grey band under
+       the sheet on the owner's home-screen iPhone, with the tab pill and
+       the sheet lifted ~65pt off the bottom. /flights, which never had
+       any of those rules, was correct on the same phone, and so was this
+       page in 1.32. So the page frame is the 1.32 frame again, and NOTHING
+       here may set position, height, min-height, padding or
+       overscroll-behavior on html or body for this page (a test enforces
+       it). Stopping the page from moving is done in script instead — see
+       the touchmove guard by the panel code. */
+    body.has-sheet { overflow: hidden; }
     .map-missing {
       position: absolute; top: 42%; left: 0; right: 0;
       text-align: center; color: var(--muted); font-size: 0.8125rem;
@@ -1503,55 +1471,91 @@
       if (!panel) return;
       var sheet = document.getElementById('sheet');
 
-      // THE SLIDE, TAKE TWO (1.33.0). 1.32.0 tried to fix the "teleport"
-      // with CSS alone — flip visibility instantly on the way in, delayed
-      // on the way out — and on the owner's iPhone the panel still jumped.
-      // Two things defeated it:
+      // THE SLIDE, TAKE THREE (1.33.3) — played, not transitioned.
       //
-      //   1. Safari only animates FROM a state it has actually painted. A
-      //      panel switched from hidden to visible and to its open
-      //      position in the same frame has no painted "closed" frame to
-      //      start from, whatever the transition rules say.
-      //   2. focus() on the close button in that same frame makes Safari
-      //      settle layout immediately — which lands the panel at its end
-      //      position before any animation can run.
+      // 1.32.0 (CSS visibility timing) and 1.33.0 (a staged first frame
+      // before adding .open) both relied on a CSS TRANSITION, which only
+      // runs if the browser decides a style changed between two frames
+      // it painted. Chromium slid every time; the owner's iPhone jumped
+      // every time. A transition is the browser's inference; an animation
+      // is an instruction.
       //
-      // So it is done in three explicit steps: make the panel visible
-      // where it already sits (off the bottom of the screen), wait for the
-      // browser to PAINT that — two animation frames, the reliable way to
-      // be sure one paint has happened — then add `.open` and let the
-      // transform animate. Focus moves to the close button only once the
-      // slide has finished.
-      var openTimer = null;
+      // So the panel's class now only says where it ENDS, and the motion
+      // is played with element.animate(), which carries its own start and
+      // end keyframes. Nothing has to have been painted first and there is
+      // no style change for Safari to collapse. Closing plays the same
+      // thing backwards and drops the class when it finishes.
+      //
+      // Focus still waits for the slide to end: focus() forces layout,
+      // and doing it mid-slide is one of the ways 1.32.0 lost its motion.
+      var SLIDE_MS = 300;
+      var SLIDE_EASE = 'cubic-bezier(0.4, 0, 0.2, 1)';
+      var OFF = 'translateY(101%)', ON = 'translateY(0px)';
+      var anim = null, openTimer = null;
+
+      function currentY() {
+        // Where the panel is right now, so reversing mid-slide starts from
+        // there instead of snapping to an end.
+        try {
+          var m = new DOMMatrixReadOnly(getComputedStyle(panel).transform);
+          return 'translateY(' + m.m42 + 'px)';
+        } catch (e) { return null; }
+      }
+      function play(from, to, done) {
+        if (anim) { try { anim.cancel(); } catch (e) {} anim = null; }
+        if (!panel.animate) { if (done) done(); return; }
+        anim = panel.animate([{ transform: from }, { transform: to }],
+                             { duration: SLIDE_MS, easing: SLIDE_EASE });
+        anim.onfinish = function () { anim = null; if (done) done(); };
+      }
       function openPanel() {
         if (openTimer) { clearTimeout(openTimer); openTimer = null; }
         panel.scrollTop = 0;
-        if (panel.classList.contains('open')) return;
-        panel.classList.add('staging');            // visible, still off-screen
-        void panel.offsetHeight;                   // commit that style now
-        window.requestAnimationFrame(function () {
-          window.requestAnimationFrame(function () {
-            panel.classList.add('open');
-            panel.classList.remove('staging');
-            openTimer = setTimeout(function () {
-              openTimer = null;
-              if (closeBtn && panel.classList.contains('open')) {
-                try { closeBtn.focus({ preventScroll: true }); } catch (e) {}
-              }
-            }, 320);
-          });
-        });
+        var wasOpen = panel.classList.contains('open') && !panel._closing;
+        var from = (anim && currentY()) || OFF;
+        panel._closing = false;
+        panel.classList.add('open');
+        if (wasOpen && !anim) return;
+        play(from, ON);
+        openTimer = setTimeout(function () {
+          openTimer = null;
+          if (closeBtn && panel.classList.contains('open') && !panel._closing) {
+            try { closeBtn.focus({ preventScroll: true }); } catch (e) {}
+          }
+        }, SLIDE_MS + 20);
       }
       function closePanel() {
         if (openTimer) { clearTimeout(openTimer); openTimer = null; }
-        panel.classList.remove('staging');
-        panel.classList.remove('open');
-        // Hand focus back to the list so it is not left on a button that
-        // is sliding off the screen.
+        if (!panel.classList.contains('open')) return;
         if (document.activeElement && panel.contains(document.activeElement)) {
           try { document.activeElement.blur(); } catch (e) {}
         }
+        var from = (anim && currentY()) || ON;
+        panel._closing = true;
+        play(from, OFF, function () {
+          if (panel._closing) {
+            panel.classList.remove('open');
+            panel._closing = false;
+          }
+        });
       }
+
+      // KEEP THE PAGE STILL (1.33.3). The tracker is all fixed furniture,
+      // but iOS will still drag the whole page — rubber-banding it, map
+      // and all — under a finger that is not on something scrollable.
+      // CSS that tried to stop this (1.33.0, 1.33.2) moved the bottom of
+      // the screen on the owner's iPhone, so it is done here instead: a
+      // drag is allowed through only on things that scroll or pan
+      // themselves — the flight list, the detail panel, the map — and on
+      // form controls (the radar slider). Everywhere else it is cancelled.
+      document.addEventListener('touchmove', function (e) {
+        if (!document.body.classList.contains('has-sheet')) return;
+        var t = e.target;
+        if (t && t.closest && t.closest(
+            '#sheet-body, #detail-panel, #flight-map, input, select, textarea, .map-settings-panel')) return;
+        if (e.cancelable) e.preventDefault();
+      }, { passive: false });
+
       // AUTO-OPEN WHEN A LEG IS AIRBORNE, on load, once.
       //
       // Somebody opening this app while he is in the air wants the flight,
