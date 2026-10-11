@@ -1648,8 +1648,15 @@ def test_map_cannot_steal_the_scroll():
     check("the document no longer scrolls", "body.has-sheet {\n      overflow: hidden;" in html)
     # 1.33.0: overflow:hidden alone does not stop iOS scrolling the page
     # under a drag that leaves the list; the body is pinned as well.
-    check("...and is PINNED, which is what iOS actually obeys",
-          "position: fixed; inset: 0;" in html.split("body.has-sheet {", 1)[1][:200])
+    # 1.33.0 pinned the body (position:fixed) and it moved the tab pill
+    # and the sheet up on an installed iPhone. 1.33.2: the body is clamped
+    # to the screen with the extra padding removed, so there is nothing to
+    # scroll — and it must never be pinned again.
+    block = html.split("body.has-sheet {", 1)[1].split("}", 1)[0]
+    check("...by having nothing to scroll: clamped to the screen",
+          "height: 100%; min-height: 0;" in block and "padding-bottom: 0 !important" in block)
+    check("...and NOT by pinning the body, which broke the iPhone layout",
+          "position: fixed" not in block)
     check("...and the only scroller is the sheet's own body",
           ".sheet-body {" in html and "overflow-y: auto" in html)
     # The strip of map ABOVE the card is still pannable — that was true of

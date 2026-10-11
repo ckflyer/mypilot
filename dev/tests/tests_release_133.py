@@ -317,6 +317,9 @@ def test_admin_inbox_and_share(client_pilot):
     r = viewer.get("/settings")
     check("...and so does a family viewer",
           r.status_code == 200 and 'id="share-register"' in r.text, str(r.status_code))
+    top = r.text.split('class="topbar"', 1)[1].split("<h1>", 1)[0]
+    check("it sits in the top bar, beside log out (1.33.2)",
+          'id="share-register"' in top and "logout-btn" in top)
 
 
 def test_tracker_ui():

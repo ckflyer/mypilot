@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.33.1 -->
+<!-- BUILT_FOR 1.33.2 -->
 <html lang="en" data-theme="{{ s.theme }}" data-accent="{{ s.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -33,6 +33,19 @@
       cursor: pointer; flex-shrink: 0;
     }
     .logout-btn:hover { color: var(--text); border-color: var(--muted); }
+    .topbar-actions { display: flex; align-items: center; gap: 0.5rem; }
+    /* The log-out button's outline and colour, at 30px tall rather than 34,
+       with room for the word. */
+    .share-btn {
+      height: 30px; padding: 0 0.7rem 0 0.6rem; margin: 0;
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border); border-radius: 999px;
+      font: inherit; font-size: 0.78rem; font-weight: 600;
+      cursor: pointer; flex-shrink: 0;
+    }
+    .share-btn:hover { color: var(--text); border-color: var(--muted); }
+    .share-btn svg { width: 14px; height: 14px; flex: 0 0 auto; }
     h1 { font-size: 1.75rem; letter-spacing: -0.02em; margin: 0 0 0.2rem 0.4rem; }
     .sub { color: var(--muted); font-size: 0.85rem; margin: 0 0 0.5rem 0.4rem; }
 
@@ -91,17 +104,6 @@
       border: none; border-radius: 9px; font-weight: 600;
       cursor: pointer; font-size: 0.9rem;
     }
-    .share-invite {
-      display: flex; align-items: center; gap: 0.9rem;
-      padding: 0.8rem 0.9rem;
-    }
-    .share-invite-text { flex: 1 1 auto; min-width: 0; }
-    .share-invite-title { font-weight: 600; }
-    .share-invite-sub { font-size: 0.8rem; color: var(--muted); margin-top: 0.15rem; }
-    #share-register {
-      flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.4rem;
-    }
-    #share-register svg { width: 16px; height: 16px; flex: 0 0 auto; }
     button.ghost {
       padding: 0.6rem 1rem; background: transparent; color: var(--accent);
       border: 1px solid var(--border); border-radius: 9px;
@@ -165,9 +167,18 @@
 <body>
   <div class="topbar">
     <div class="brand">MyPilot</div>
+    {#- SHARE THE SIGN-UP LINK, beside log out (owner's layout, 1.33.2).
+        Visible to everyone — pilots and family — since 1.33.1. Same
+        outline and colour as the log-out button, a little shorter, and it
+        keeps its word and icon so it reads as "share the app" rather than
+        as one more mystery glyph. -#}
+    <div class="topbar-actions">
+    <button type="button" class="share-btn" id="share-register" data-path="/register"
+            title="Share the MyPilot sign-up link">{% include "partials/share_glyph.html" %}<span>Share</span></button>
     <form method="post" action="/logout" style="margin:0;">
       <button type="submit" class="logout-btn" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></button>
     </form>
+    </div>
   </div>
 
   <h1>Settings</h1>
@@ -210,27 +221,6 @@
       the way in, because a page served from a stale cache would report a
       stale version, and the stale-cache case is exactly when the version
       matters. -#}
-  {#- INVITE A PILOT (report #10; moved from Admin to here in 1.33.1).
-      On Settings rather than Admin because the owner wants EVERYONE to be
-      able to pass it on — any pilot, and family viewers too, who are often
-      the ones who know another crew family that would want it. Shown
-      outside the collapsible rows so the button is visible without a tap.
-      The link is built from the address this page was opened on, so it is
-      the Cloudflare address when you are on it. Sign-up is open by design
-      (1.33.0), so sharing it grants nothing beyond what /register already
-      allows. -#}
-  <div class="seclabel">Share</div>
-  <div class="glist">
-    <div class="share-invite">
-      <div class="share-invite-text">
-        <div class="share-invite-title">Invite a pilot</div>
-        <div class="share-invite-sub">Send another crew member the sign-up link so their family can follow them too.</div>
-      </div>
-      <button type="button" class="primary" id="share-register"
-              data-path="/register">{% include "partials/share_glyph.html" %}<span>Share</span></button>
-    </div>
-  </div>
-
   <div class="seclabel">Help</div>
   <div class="glist">
     <details class="grow" {% if open_group == 'feedback' %}open{% endif %}>
@@ -547,7 +537,7 @@
     }
   })();
 
-  // Invite a pilot: share the sign-up link (report #10, 1.33.1).
+  // Share the sign-up link — the button beside log out (1.33.1, moved 1.33.2).
   // The phone's own share sheet where there is one, the clipboard where
   // there is not. Text and url go separately — iOS appends the url itself,
   // so putting it in the text as well printed it twice.

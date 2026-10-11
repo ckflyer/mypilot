@@ -183,9 +183,9 @@ so `bash update.sh` is the safe way to invoke it either way.)
   for supporting more than one pilot on the same install. **Sign-up is
   open:** anyone who can reach the site can create a pilot account at
   `/register` (the owner's decision, 1.33.0). A new account sees only its
-  own schedule and is never an admin. Settings → **Invite a pilot** (for
-  everyone, family included) sends that page through the phone's share
-  sheet.
+  own schedule and is never an admin. The **Share** button at the top of
+  Settings, beside log out (for everyone, family included), sends that
+  page through the phone's share sheet.
 - **Changing your password signs out every other device** (1.33.0). The
   one you changed it on stays signed in. Resetting it with the recovery
   code does the same.

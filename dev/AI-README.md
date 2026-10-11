@@ -230,7 +230,7 @@ and say so before editing — that has already cost a working feature once.
 2. Add a `## VERSION HISTORY` entry at the top of it.
 3. Update `## STATE
 
-**v1.33.1.** Renamed to MyPilot in 1.0.0. Deployed on TrueNAS via Dockge,
+**v1.33.2.** Renamed to MyPilot in 1.0.0. Deployed on TrueNAS via Dockge,
 reached from outside through a Cloudflare tunnel. Multi-user, sign-up
 open: the owner plus several FOs, who fly the same legs — hence shared
 flight rows (v5.1, retained).
@@ -1305,6 +1305,39 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.33.2 — the grey band under the tracker, and Share beside log out
+
+**1.33.0 BROKE THE TRACKER'S BOTTOM EDGE on the owner's iPhone** (installed
+to the home screen). To stop iOS scrolling the page under a drag that ran
+off the flight list, 1.33.0 pinned the body with `position: fixed;
+inset: 0`. On the device that moved where "the bottom of the screen" is
+for every fixed element: the tab pill rode up, the sheet stopped short of
+the bottom, and a grey band of page background showed beneath both. The
+owner's screenshots compared it with /flights, which was right: pill at
+the bottom, content scrolling cleanly underneath. Chromium showed none of
+this, which is invariant 52 again.
+
+Reverted. The real reason the page could scroll at all was that the body
+was TALLER than the screen: min-height 100vh plus top padding plus the
+72px bottom padding app.css gives every page for the pill. On the tracker
+everything visible is position:fixed, so the body is now clamped to
+exactly the screen (`height: 100%; min-height: 0`, bottom padding 0) and
+there is nothing to scroll. The gesture lock stays as the other half.
+A test now forbids `position: fixed` on `body.has-sheet`.
+
+REJECTED: keeping the pin and compensating with safe-area offsets — it
+fixes a symptom on one iOS version and would need re-tuning on the next.
+
+**Share moved to the top bar of Settings**, beside log out (owner's
+layout): same outline and muted colour as log-out, 30px tall instead of
+34, keeps the icon and the word "Share". The separate Share section is
+gone.
+
+**Deploy command, recorded so every release note can include it** (owner
+asked for it with each update):
+
+    cd /mnt/pool/apps/dockge/stacks/my-flight-tracker && bash update.sh
 
 ### 1.33.1 — the sign-up link, for everyone
 

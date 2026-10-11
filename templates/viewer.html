@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILT_FOR 1.33.1 -->
+<!-- BUILT_FOR 1.33.2 -->
 <html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
@@ -882,21 +882,32 @@
        and the sheet owns the only scrollbar. This is also what makes the
        map unable to steal a scroll — there is no page scroll to steal, so
        .map-shield went with it. */
-    /* PINNED, not just overflow:hidden (1.33.0). iOS Safari does not
-       honour overflow:hidden on <body> for touch: a drag that runs off the
-       end of the flight list, or off its top edge onto the map, was
-       handed on to the PAGE, which then scrolled underneath everything —
-       and with the map fixed behind it, that read as the map sliding
-       about while the list was being scrolled. Fixing the body in place
-       is the standard way to tell iOS there is no page to scroll at all.
-       Every visible thing on this page is already position:fixed, so
-       nothing moves. */
+    /* NOTHING TO SCROLL, rather than pinned (1.33.2).
+
+       1.33.0 pinned the body with `position: fixed; inset: 0` to stop iOS
+       scrolling the page under a drag that ran off the flight list. On the
+       owner's iPhone (installed to the home screen) that moved where
+       "the bottom of the screen" is for every fixed element: the tab pill
+       rode up, the sheet stopped short, and a grey band of page background
+       showed beneath both. Reverted.
+
+       The actual reason the page could scroll at all: the body was TALLER
+       than the screen — min-height 100vh plus the top padding plus the
+       72px bottom padding app.css gives every page for the tab pill. iOS
+       will scroll anything taller than the screen, overflow:hidden or not.
+       On this page every visible thing is position:fixed, so the body's
+       own height is irrelevant; it is clamped to exactly the screen and
+       the extra padding removed, and there is simply nothing left to
+       scroll. The gesture lock in the script stays as the second half. */
+    html:has(body.has-sheet) {
+      height: 100%; overflow: hidden; overscroll-behavior: none;
+    }
     body.has-sheet {
       overflow: hidden;
-      position: fixed; inset: 0;
+      height: 100%; min-height: 0;
+      padding-bottom: 0 !important;
       overscroll-behavior: none;
     }
-    html:has(body.has-sheet) { overscroll-behavior: none; }
     .map-missing {
       position: absolute; top: 42%; left: 0; right: 0;
       text-align: center; color: var(--muted); font-size: 0.8125rem;
